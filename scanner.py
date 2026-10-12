@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 高校代理扫描器 —— 分片 + 两阶段 + 断点续跑 + 存活 IP 预筛
-验证资源地址：http://www.baidu.com/
-验证资源参数：全球领先的中文搜索引擎
+验证方式：curl，3 种协议（http / socks5 / socks4）
+验证目标：http://myip.ipip.net
+成功判定：输出含 '当前 IP'
 并发：20 IP × 10 端口 = 200
 """
 
@@ -13,25 +14,22 @@ import json
 import time
 import socket
 import bisect
+import shutil
 import argparse
+import subprocess
 import ipaddress
 import threading
-import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ============ 配置 ============
-# 验证资源地址
-VERIFY_URL = 'http://www.baidu.com/'
-# 验证资源参数
-VERIFY_KEYWORDS = ['全球领先的中文搜索引擎']
-
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+CONNECT_TIMEOUT = 1
+MAX_TIME = 3
 
 MAX_RUNTIME_SEC = int(os.environ.get('MAX_RUNTIME_SEC', 20880))
 
 
 def _build_common_ports():
-    """12 个探针端口"""
     return [
         22, 80, 443, 3389, 1080, 1081, 8080, 8081,
         7890, 3128, 8000, 8443,
@@ -50,13 +48,12 @@ SHARD_INDEX = args.shard
 SHARD_TOTAL = args.shard_total
 
 # ============ 超时 / 并发 ============
-TCP_TIMEOUT = 3          # 搜索连接超时
-VERIFY_TIMEOUT = 30      # 验证超时
+TCP_TIMEOUT = 3
+VERIFY_TIMEOUT = 30
 VERIFY_RETRY = 0
-VERIFY_DELAY = 1.0
-TCP_WORKERS = 20         # 同时扫描的 IP 数
-PORT_WORKERS = 10        # 每 IP 内并发端口数
-# 全局最大连接 = 20 × 10 = 200
+VERIFY_DELAY = 0.0
+TCP_WORKERS = 20
+PORT_WORKERS = 10
 IP_COOLDOWN = 0.5
 VERIFY_RATE_LIMIT = 1
 
@@ -74,6 +71,11 @@ else:
     OPEN_IPS_FILE = 'open_ips.txt'
 
 CRLF = '\r\n'
+
+CURL = shutil.which('curl') or 'curl'
+
+# 3 种协议（不要 https）
+PROTOCOLS = ('http', 'socks5', 'socks4')
 
 
 def log(msg):
@@ -226,35 +228,52 @@ def tcp_check(ip, port, timeout=TCP_TIMEOUT):
             pass
 
 
+def _build_curl_args(ip, port, protocol):
+    """3 种协议的 curl 参数"""
+    address = '%s:%d' % (ip, port)
+    if protocol == 'http':
+        return ['-x', address, 'http://myip.ipip.net']
+    if protocol == 'socks5':
+        return ['--socks5', address, 'http://myip.ipip.net']
+    if protocol == 'socks4':
+        return ['--socks4', address, 'http://myip.ipip.net']
+    return None
+
+
 def verify_proxy(ip, port, protocol):
-    """通过代理访问验证资源地址，检查页面是否含验证资源参数"""
-    proxy_url = '%s://%s:%d' % (protocol, ip, port)
-    proxies = {'http': proxy_url, 'https': proxy_url}
-    if VERIFY_DELAY > 0:
-        time.sleep(VERIFY_DELAY)
+    """用 curl 通过代理访问 myip.ipip.net，成功输出含 '当前 IP'。"""
+    args = _build_curl_args(ip, port, protocol)
+    if args is None:
+        return False
+
     verify_rate_wait()
+
+    cmd = [
+        CURL,
+        '-sS',
+        '-4',
+        '--connect-timeout', str(CONNECT_TIMEOUT),
+        '--max-time', str(MAX_TIME),
+        '-A', UA,
+    ] + args
+
     try:
-        r = requests.get(VERIFY_URL, proxies=proxies, timeout=VERIFY_TIMEOUT,
-                         headers={'User-Agent': UA}, allow_redirects=True)
-        if r.status_code != 200:
-            return False
-        try:
-            text = r.content.decode('utf-8', errors='ignore')
-        except Exception:
-            text = r.text
-        if 'baidu.com' not in r.url and 'baidu.com' not in text:
-            return False
-        if not any(kw in text for kw in VERIFY_KEYWORDS):
-            return False
-        return True
+        proc = subprocess.run(cmd, capture_output=True, timeout=MAX_TIME + 3)
+        output = proc.stdout.decode('utf-8', errors='ignore')
+        if '当前 IP' in output or '当前IP' in output:
+            return True
+        return False
+    except subprocess.TimeoutExpired:
+        return False
     except Exception:
         return False
 
 
 def scan_ip_port(ip, port):
+    """对单个 IP:端口，3 种协议依次尝试，任一成功即返回。"""
     if not tcp_check(ip, port):
         return False, None
-    for proto in ('http', 'socks5', 'socks4'):
+    for proto in PROTOCOLS:
         if verify_proxy(ip, port, proto):
             return True, (ip, port, proto)
     return True, None
@@ -391,8 +410,11 @@ def main():
     log('搜索连接超时: %d s | 验证超时: %d s' % (TCP_TIMEOUT, VERIFY_TIMEOUT))
     log('IP 并发: %d  ×  端口并发: %d  =  全局最大 %d 条连接'
         % (TCP_WORKERS, PORT_WORKERS, TCP_WORKERS * PORT_WORKERS))
-    log('验证资源地址: %s' % VERIFY_URL)
-    log('验证资源参数: %s' % VERIFY_KEYWORDS)
+    log('验证方式: curl (%s)' % CURL)
+    log('验证目标: http://myip.ipip.net')
+    log('验证协议: %s' % (', '.join(PROTOCOLS)))
+    log('成功判定: 输出含"当前 IP"')
+    log('curl 超时: 连接 %d s / 总 %d s' % (CONNECT_TIMEOUT, MAX_TIME))
     log('全局限速: %d 次/秒' % VERIFY_RATE_LIMIT if VERIFY_RATE_LIMIT > 0 else '不限速')
     log('每 IP 冷却: %.1f s' % IP_COOLDOWN)
     log('最大运行时长: %d 秒 (%.2f 小时)'
