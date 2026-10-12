@@ -595,36 +595,37 @@ def main():
             % (SHARD_INDEX, SHARD_TOTAL, current_phase,
                total_ips - state['position']))
 
-    save_json(STATE_FILE, state)
-
-    if current_phase == 'common' and state.get('completed'):
+    # ★ 先写产出文件（无论是否 completed，只要本 session 有数据就写）
+    # ★ 再 save state —— 保证 state.position 前进时，产出文件已经落盘
+    if current_phase == 'common' and open_ips:
         try:
             existing_open = load_ip_set(OPEN_IPS_FILE)
             existing_open.update(open_ips)
             with open(OPEN_IPS_FILE, 'w', encoding='utf-8', newline='') as f:
                 for ip in sorted(existing_open):
                     f.write(ip + CRLF)
-            log('=' * 60)
             log('本 session 存活 IP: %d 个' % len(open_ips))
             log('存活 IP 列表已更新: %s (本 session %d, 累计 %d)'
                 % (OPEN_IPS_FILE, len(open_ips), len(existing_open)))
         except Exception as e:
             log('[!] 写存活 IP 文件失败: %s' % e)
 
-    elif current_phase == 'proxy' and state.get('completed'):
+    elif current_phase == 'proxy' and proxy_missing_ips:
         try:
             existing_missing = load_ip_set(PROXY_MISSING_FILE)
             existing_missing.update(proxy_missing_ips)
             with open(PROXY_MISSING_FILE, 'w', encoding='utf-8', newline='') as f:
                 for ip in sorted(existing_missing):
                     f.write(ip + CRLF)
-            log('=' * 60)
             log('本 session 找到代理的 IP: %d 个' % len(proxy_found_ips))
             log('本 session 待深扫 IP: %d 个' % len(proxy_missing_ips))
             log('待深扫列表已更新: %s (本 session %d, 累计 %d)'
                 % (PROXY_MISSING_FILE, len(proxy_missing_ips), len(existing_missing)))
         except Exception as e:
             log('[!] 写待深扫文件失败: %s' % e)
+
+    # ★ 最后 save state
+    save_json(STATE_FILE, state)
 
     dt = time.time() - t0
     log('-' * 60)
