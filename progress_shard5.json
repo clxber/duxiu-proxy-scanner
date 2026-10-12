@@ -1,0 +1,14 @@
+{
+  "position": 13312,
+  "done": 159744,
+  "total_ips": 13312,
+  "total_tasks": 159744,
+  "ports_count": 12,
+  "phase": "common",
+  "shard_index": 5,
+  "shard_total": 8,
+  "started_at": "2026-10-12 07:33:26",
+  "completed": true,
+  "session": 1,
+  "completed_at": "2026-10-12 08:12:44"
+}
