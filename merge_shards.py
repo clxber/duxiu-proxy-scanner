@@ -2,6 +2,7 @@
 """
 合并 8 个分片结果，判断阶段推进 / 触发下一轮 / 清理
 四阶段：common → revalidate → proxy → full
+节约原则：proxy 找到 ≥1 个代理 → 结束（不切 full）；0 个 → 切 full
 """
 
 import os
@@ -181,15 +182,18 @@ def main():
                 trigger = 'yes'
 
         elif current_phase == 'proxy':
-            if total_missing == 0:
-                log('proxy 完成，所有存活 IP 都找到代理 → 结束')
+            # ★ 节约原则：找到 ≥1 个代理就结束，不切 full
+            if len(all_lines) > 0:
+                log('proxy 完成，找到 %d 个代理 → 结束（满足节约原则，跳过 full）'
+                    % len(all_lines))
                 phase_state['proxy_completed'] = True
                 phase_state['full_completed'] = True
                 save_json(PHASE_FILE, phase_state)
                 trigger = 'no'
                 should_cleanup = True
             else:
-                log('proxy 完成，%d 个 IP 待深扫 → 切 full' % total_missing)
+                log('proxy 完成，0 代理 → 切 full（深扫剩余 %d 个 IP）'
+                    % total_missing)
                 phase_state['current'] = 'full'
                 phase_state['proxy_completed'] = True
                 save_json(PHASE_FILE, phase_state)
