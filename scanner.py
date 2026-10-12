@@ -5,7 +5,7 @@
 阶段 2 proxy ：171 代理端口（完整扫描 + 代理验证，必须扫完）
 阶段 3 full  ：65535 全端口（只扫 proxy 未找到代理的 IP）
 验证方式：curl，3 种协议（http / socks5 / socks4）
-验证目标：http://myip.ipip.net
+验证目标：http://www.baidu.com/
 """
 
 import os
@@ -25,19 +25,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 CONNECT_TIMEOUT = 5
 MAX_TIME = 15
+VERIFY_URL = 'http://www.baidu.com/'
 
 MAX_RUNTIME_SEC = int(os.environ.get('MAX_RUNTIME_SEC', 20880))
 
-PROBE_BATCH_SIZE = 30
-
 
 def _build_probe_ports_12():
-    """12 个高优先级探针端口（放最前面）"""
     return [22, 80, 443, 3389, 1080, 1081, 8080, 8081, 7890, 3128, 8000, 8443]
 
 
 def _build_proxy_ports():
-    """171 代理端口"""
     groups = [
         (1080, 1090), (10808, 10820), (7890, 7899), (8080, 8090),
         (8000, 8010), (8888, 8890), (9000, 9010), (9090, 9099),
@@ -52,7 +49,6 @@ def _build_proxy_ports():
 
 
 def _build_common_ports():
-    """common 阶段端口：12 探针 + 171 代理（去重，12 探针排最前）"""
     probe12 = _build_probe_ports_12()
     proxy = _build_proxy_ports()
     seen = set()
@@ -280,11 +276,11 @@ def tcp_check(ip, port, timeout=TCP_TIMEOUT):
 def _build_curl_args(ip, port, protocol):
     address = '%s:%d' % (ip, port)
     if protocol == 'http':
-        return ['-x', address, 'http://myip.ipip.net']
+        return ['-x', address, VERIFY_URL]
     if protocol == 'socks5':
-        return ['--socks5-hostname', address, 'http://myip.ipip.net']
+        return ['--socks5-hostname', address, VERIFY_URL]
     if protocol == 'socks4':
-        return ['--socks4a', address, 'http://myip.ipip.net']
+        return ['--socks4a', address, VERIFY_URL]
     return None
 
 
@@ -305,7 +301,7 @@ def verify_proxy(ip, port, protocol):
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=MAX_TIME + 3)
         output = proc.stdout.decode('utf-8', errors='ignore')
-        if '当前 IP' in output or '当前IP' in output:
+        if 'baidu.com' in output or '百度' in output:
             return True
         return False
     except subprocess.TimeoutExpired:
@@ -315,12 +311,10 @@ def verify_proxy(ip, port, protocol):
 
 
 def scan_port_common(ip, port):
-    """common 阶段：只做 TCP 探活"""
     return tcp_check(ip, port), None
 
 
 def scan_port_full(ip, port):
-    """proxy / full 阶段：TCP + 代理验证"""
     if not tcp_check(ip, port):
         return False, None
     for proto in PROTOCOLS:
@@ -481,9 +475,9 @@ def main():
     log('IP 并发: %d  ×  端口并发: %d  =  全局最大 %d 条连接'
         % (TCP_WORKERS, PORT_WORKERS, TCP_WORKERS * PORT_WORKERS))
     log('验证方式: curl (%s)' % CURL)
-    log('验证目标: http://myip.ipip.net')
+    log('验证目标: %s' % VERIFY_URL)
     log('验证协议: %s' % (', '.join(PROTOCOLS)))
-    log('成功判定: 输出含"当前 IP"')
+    log('成功判定: 输出含 baidu.com 或 百度')
     log('curl 超时: 连接 %d s / 总 %d s' % (CONNECT_TIMEOUT, MAX_TIME))
     log('全局限速: %d 次/秒' % VERIFY_RATE_LIMIT if VERIFY_RATE_LIMIT > 0 else '不限速')
     log('最大运行时长: %d 秒 (%.2f 小时)'
@@ -557,7 +551,6 @@ def main():
                         log('[+] ' + line_out)
                 with found_lock:
                     port_tasks[0] += 1
-                # 只有 common 阶段短路
                 if short_circuit and ip_has_open:
                     break
 
