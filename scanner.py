@@ -32,7 +32,6 @@ MAX_RUNTIME_SEC = int(os.environ.get('MAX_RUNTIME_SEC', 20880))
 
 
 def _build_common_ports():
-    """阶段 1：12 探针端口"""
     return [
         22, 80, 443, 3389, 1080, 1081, 8080, 8081,
         7890, 3128, 8000, 8443,
@@ -40,7 +39,6 @@ def _build_common_ports():
 
 
 def _build_proxy_ports():
-    """阶段 2：171 常见代理端口"""
     groups = [
         (1080, 1090), (10808, 10820), (7890, 7899), (8080, 8090),
         (8000, 8010), (8888, 8890), (9000, 9010), (9090, 9099),
@@ -263,7 +261,6 @@ def tcp_check(ip, port, timeout=TCP_TIMEOUT):
 
 
 def _build_curl_args(ip, port, protocol):
-    """3 种协议的 curl 参数"""
     address = '%s:%d' % (ip, port)
     if protocol == 'http':
         return ['-x', address, 'http://myip.ipip.net']
@@ -353,6 +350,26 @@ def get_phase_config(phase):
         raise ValueError('未知阶段: %s' % phase)
 
 
+def _skip_this_shard(state_file, output_file, phase, ports_count):
+    """本片无待扫 IP：写 completed 状态 + 空产出文件"""
+    state = {
+        'position': 0, 'done': 0, 'total_ips': 0, 'total_tasks': 0,
+        'ports_count': ports_count, 'phase': phase,
+        'shard_index': SHARD_INDEX, 'shard_total': SHARD_TOTAL,
+        'started_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'completed': True,
+        'completed_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'session': 1,
+    }
+    save_json(state_file, state)
+    if output_file:
+        try:
+            with open(output_file, 'w', encoding='utf-8', newline='') as f:
+                pass
+        except Exception:
+            pass
+
+
 def main():
     if not os.path.exists(INPUT_FILE):
         log('未找到 %s' % INPUT_FILE)
@@ -386,22 +403,14 @@ def main():
                     % (current_phase, upstream_file, before, len(ip_list)))
             else:
                 log('[%s] 上游文件为空，本片无待扫 IP，直接标记完成' % current_phase)
-                state = {
-                    'position': 0, 'done': 0, 'total_ips': 0, 'total_tasks': 0,
-                    'ports_count': len(PORTS), 'phase': current_phase,
-                    'shard_index': SHARD_INDEX, 'shard_total': SHARD_TOTAL,
-                    'started_at': time.strftime('%Y-%m-%d %H:%M:%S'),
-                    'completed': True,
-                    'completed_at': time.strftime('%Y-%m-%d %H:%M:%S'),
-                    'session': 1,
-                }
-                save_json(STATE_FILE, state)
-                if output_filter_file:
-                    with open(output_filter_file, 'w', encoding='utf-8', newline='') as f:
-                        pass
+                _skip_this_shard(STATE_FILE, output_filter_file, current_phase, len(PORTS))
                 return
         else:
-            log('[%s] 无上游文件 %s，扫描全部 IP' % (current_phase, upstream_file))
+            # ★ Bug 1 修复：无上游文件 = 上游阶段已完成但 0 产出 → 本片跳过
+            log('[%s] 无上游文件 %s，视为无待扫 IP，本片跳过'
+                % (current_phase, upstream_file))
+            _skip_this_shard(STATE_FILE, output_filter_file, current_phase, len(PORTS))
+            return
 
     total_ips = len(ip_list)
     total_tasks = total_ips * len(PORTS)
@@ -550,8 +559,6 @@ def main():
                     if ip_has_proxy:
                         proxy_found_ips.add(ip)
                     else:
-                        # 进入 proxy 阶段的 IP 已在 common 存活
-                        # 未找到代理 → 加入待深扫
                         proxy_missing_ips.add(ip)
 
             if IP_COOLDOWN > 0:
@@ -596,7 +603,6 @@ def main():
                total_ips - state['position']))
 
     # ★ 先写产出文件（无论是否 completed，只要本 session 有数据就写）
-    # ★ 再 save state —— 保证 state.position 前进时，产出文件已经落盘
     if current_phase == 'common' and open_ips:
         try:
             existing_open = load_ip_set(OPEN_IPS_FILE)
