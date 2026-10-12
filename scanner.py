@@ -268,10 +268,8 @@ def _build_curl_args(ip, port, protocol):
     if protocol == 'http':
         return ['-x', address, 'http://myip.ipip.net']
     if protocol == 'socks5':
-        # socks5-hostname 让代理做 DNS 解析
         return ['--socks5-hostname', address, 'http://myip.ipip.net']
     if protocol == 'socks4':
-        # socks4a 让代理做 DNS 解析
         return ['--socks4a', address, 'http://myip.ipip.net']
     return None
 
@@ -551,7 +549,9 @@ def main():
                 with open_ips_lock:
                     if ip_has_proxy:
                         proxy_found_ips.add(ip)
-                    elif ip_has_open:
+                    else:
+                        # 进入 proxy 阶段的 IP 已在 common 存活
+                        # 未找到代理 → 加入待深扫
                         proxy_missing_ips.add(ip)
 
             if IP_COOLDOWN > 0:
