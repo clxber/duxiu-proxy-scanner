@@ -1,0 +1,11 @@
+{
+  "position": 8654,
+  "done": 1508175,
+  "total_ips": 13312,
+  "phase": "common",
+  "shard_index": 3,
+  "shard_total": 8,
+  "started_at": "2026-10-12 10:56:42",
+  "completed": false,
+  "session": 1
+}
