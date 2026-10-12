@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-高校代理扫描器 —— 三阶段 + 分片 + 断点续跑
-阶段 1 common：12 探针 + 171 代理端口（TCP 探活，发现 1 个 open 立即跳）
-阶段 2 proxy ：171 代理端口（完整扫描 + 代理验证，必须扫完）
-阶段 3 full  ：65535 全端口（只扫 proxy 未找到代理的 IP）
+高校代理扫描器 —— 四阶段 + 分片 + 断点续跑
+阶段 1 common    ：12 探针 + 171 代理（TCP 探活，发现 1 个 open 立即跳）
+阶段 2 revalidate：12 探针 + 171 代理（对 common 存活 IP 重新探活，剔除失效的）
+阶段 3 proxy     ：171 代理端口（完整扫描 + 验证，必须扫完）
+阶段 4 full      ：65535 全端口（只扫 proxy 未找到代理的 IP）
 验证方式：curl，3 种协议（http / socks5 / socks4）
 验证目标：http://www.baidu.com/
 """
@@ -94,11 +95,13 @@ if SHARD_TOTAL > 1:
     STATE_FILE = 'progress_shard%d.json' % SHARD_INDEX
     OUTPUT_FILE = 'working_proxies_shard%d.txt' % SHARD_INDEX
     OPEN_IPS_FILE = 'open_ips_shard%d.txt' % SHARD_INDEX
+    OPEN_IPS_REVALIDATED_FILE = 'open_ips_revalidated_shard%d.txt' % SHARD_INDEX
     PROXY_MISSING_FILE = 'proxy_missing_shard%d.txt' % SHARD_INDEX
 else:
     STATE_FILE = 'progress.json'
     OUTPUT_FILE = 'working_proxies.txt'
     OPEN_IPS_FILE = 'open_ips.txt'
+    OPEN_IPS_REVALIDATED_FILE = 'open_ips_revalidated.txt'
     PROXY_MISSING_FILE = 'proxy_missing.txt'
 
 CRLF = '\r\n'
@@ -357,10 +360,14 @@ def expand_ranges_to_ips(ranges):
 
 
 def get_phase_config(phase):
+    """返回 (PORTS, upstream_file, output_filter_file)"""
     if phase == 'common':
         return COMMON_PORTS, None, OPEN_IPS_FILE
+    elif phase == 'revalidate':
+        # revalidate 也用 12 + 171（对少量存活 IP 重扫，很快）
+        return COMMON_PORTS, OPEN_IPS_FILE, OPEN_IPS_REVALIDATED_FILE
     elif phase == 'proxy':
-        return PROXY_PORTS, OPEN_IPS_FILE, PROXY_MISSING_FILE
+        return PROXY_PORTS, OPEN_IPS_REVALIDATED_FILE, PROXY_MISSING_FILE
     elif phase == 'full':
         return FULL_PORTS, PROXY_MISSING_FILE, None
     else:
@@ -399,6 +406,7 @@ def main():
     phase_state = load_json(PHASE_FILE) or {
         'current': 'common',
         'common_completed': False,
+        'revalidate_completed': False,
         'proxy_completed': False,
         'full_completed': False,
     }
@@ -407,6 +415,13 @@ def main():
 
     ranges = slice_ranges(all_ranges, SHARD_INDEX, SHARD_TOTAL)
     ip_list = expand_ranges_to_ips(ranges)
+
+    # 建 IP → note 映射（给 revalidate 阶段用）
+    ip_to_note = {}
+    for s, e, note in all_ranges:
+        if note:
+            # 只对活 IP 相关段记录
+            pass
 
     if upstream_file is not None:
         if os.path.exists(upstream_file):
@@ -417,6 +432,17 @@ def main():
                            if ip_int_to_str(ip_int) in wanted]
                 log('[%s] 上游过滤 (%s): %d → %d'
                     % (current_phase, upstream_file, before, len(ip_list)))
+                # revalidate 阶段从 ip_list 反查 note
+                if current_phase == 'revalidate':
+                    ip_note_map = {}
+                    for s, e, note in all_ranges:
+                        if not note:
+                            continue
+                        for ip_int, _ in ip_list:
+                            if s <= ip_int <= e:
+                                ip_note_map[ip_int] = note
+                    ip_list = [(ip_int, ip_note_map.get(ip_int, ''))
+                               for ip_int, _ in ip_list]
             else:
                 log('[%s] 上游文件为空，本片无待扫 IP，跳过' % current_phase)
                 _skip_this_shard(STATE_FILE, output_filter_file, current_phase, len(PORTS))
@@ -467,7 +493,7 @@ def main():
     log('本片 IP 段数: %d' % len(ranges))
     log('本片 IP 总数: %d' % total_ips)
     log('端口数: %d' % len(PORTS))
-    if current_phase == 'common':
+    if current_phase in ('common', 'revalidate'):
         log('  前 12 探针: %s' % PROBE_PORTS_12)
     log('本次起点: IP #%d' % state['position'])
     log('已找到代理: %d' % len(existing))
@@ -495,6 +521,7 @@ def main():
 
     open_ips_lock = threading.Lock()
     open_ips = set()
+    revalidated_ips = set()
     proxy_found_ips = set()
     proxy_missing_ips = set()
 
@@ -507,8 +534,12 @@ def main():
             return p
 
     port_pool = ThreadPoolExecutor(max_workers=TCP_WORKERS * PORT_WORKERS)
-    scan_fn = scan_port_common if current_phase == 'common' else scan_port_full
-    short_circuit = (current_phase == 'common')
+    if current_phase in ('common', 'revalidate'):
+        scan_fn = scan_port_common
+        short_circuit = True
+    else:
+        scan_fn = scan_port_full
+        short_circuit = False
 
     def worker():
         while not stop_flag[0]:
@@ -558,6 +589,10 @@ def main():
                 if ip_has_open:
                     with open_ips_lock:
                         open_ips.add(ip)
+            elif current_phase == 'revalidate':
+                if ip_has_open:
+                    with open_ips_lock:
+                        revalidated_ips.add(ip)
             elif current_phase == 'proxy':
                 with open_ips_lock:
                     if ip_has_proxy:
@@ -572,13 +607,16 @@ def main():
                     speed = port_tasks[0] / elapsed if elapsed > 0 else 0
                     pct = processed_ips[0] * 100.0 / total_ips if total_ips else 0
                     with open_ips_lock:
-                        open_count = len(open_ips)
-                        pf_count = len(proxy_found_ips)
-                        pm_count = len(proxy_missing_ips)
+                        oc = len(open_ips)
+                        rc = len(revalidated_ips)
+                        pf = len(proxy_found_ips)
+                        pm = len(proxy_missing_ips)
                     if current_phase == 'common':
-                        extra = '存活 %d' % open_count
+                        extra = '存活 %d' % oc
+                    elif current_phase == 'revalidate':
+                        extra = '重验存活 %d' % rc
                     elif current_phase == 'proxy':
-                        extra = '找到 %d | 待深扫 %d' % (pf_count, pm_count)
+                        extra = '找到 %d | 待深扫 %d' % (pf, pm)
                     else:
                         extra = ''
                     log('[进度] 已处理 %d/%d IP | 全局 %.2f%% | %s | 代理 %d | %.1f task/s | %.0f s'
@@ -638,6 +676,19 @@ def main():
                 % (OPEN_IPS_FILE, len(open_ips), len(existing_open)))
         except Exception as e:
             log('[!] 写存活 IP 文件失败: %s' % e)
+
+    elif current_phase == 'revalidate' and revalidated_ips:
+        try:
+            existing_rev = load_ip_set(OPEN_IPS_REVALIDATED_FILE)
+            existing_rev.update(revalidated_ips)
+            with open(OPEN_IPS_REVALIDATED_FILE, 'w', encoding='utf-8', newline='') as f:
+                for ip in sorted(existing_rev):
+                    f.write(ip + CRLF)
+            log('本 session 重验存活 IP: %d 个' % len(revalidated_ips))
+            log('重验存活列表已更新: %s (本 session %d, 累计 %d)'
+                % (OPEN_IPS_REVALIDATED_FILE, len(revalidated_ips), len(existing_rev)))
+        except Exception as e:
+            log('[!] 写重验存活文件失败: %s' % e)
 
     elif current_phase == 'proxy' and proxy_missing_ips:
         try:
