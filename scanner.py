@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 高校代理扫描器 —— 读秀IP认证验证 + 断点续跑
-- 20 个 IP 并发 × 每 IP 内 20 个端口并发（全局 400 连接）
-- 单 IP 约 2 秒扫完
+- 20 个 IP 并发 × 每 IP 内 10 个端口并发（全局 200 连接）
+- 单 IP 约 2-3 秒扫完
 - 被 5.8h 截断 → 自动续跑；一轮跑完 → 停，等手动触发
 """
 
@@ -61,7 +61,7 @@ VERIFY_TIMEOUT = 20
 VERIFY_RETRY = 0
 VERIFY_DELAY = 1.0
 TCP_WORKERS = 20          # 同时扫描的 IP 数量
-PORT_WORKERS = 20         # 每个 IP 内并发的端口数
+PORT_WORKERS = 10         # 每个 IP 内并发的端口数
 IP_COOLDOWN = 0.5
 VERIFY_RATE_LIMIT = 1
 
