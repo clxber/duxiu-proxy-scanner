@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-高校代理扫描器 —— 读秀IP认证验证 + 断点续跑
-- 20 个 IP 并发 × 每 IP 内 10 个端口并发（全局 200 连接）
-- 单 IP 约 2-3 秒扫完
-- 被 5.8h 截断 → 自动续跑；一轮跑完 → 停，等手动触发
+高校代理扫描器 —— 分片 + 两阶段 + 断点续跑
+分片：按 IP 切分，每片独立，同一 IP 不被两片同时扫
+阶段：common（171 端口） → full（65535 端口）
 """
 
 import os
@@ -13,6 +12,7 @@ import json
 import time
 import socket
 import bisect
+import argparse
 import ipaddress
 import threading
 import requests
@@ -26,26 +26,13 @@ DUXIU_KEYWORDS = ['读秀学术搜索', '超星', '读秀知识库']
 MAX_RUNTIME_SEC = int(os.environ.get('MAX_RUNTIME_SEC', 20880))
 
 
-def _build_ports():
+def _build_common_ports():
     groups = [
-        (1080, 1090),
-        (10808, 10820),
-        (7890, 7899),
-        (8080, 8090),
-        (8000, 8010),
-        (8888, 8890),
-        (9000, 9010),
-        (9090, 9099),
-        (10000, 10010),
-        (10080, 10086),
-        (3128, 3130),
-        (8388, 8389),
-        (8443, 8444),
-        (2052, 2096),
-        (51820, 51830),
-        (1194, 1199),
-        (9050, 9051),
-        (9150, 9151),
+        (1080, 1090), (10808, 10820), (7890, 7899), (8080, 8090),
+        (8000, 8010), (8888, 8890), (9000, 9010), (9090, 9099),
+        (10000, 10010), (10080, 10086), (3128, 3130), (8388, 8389),
+        (8443, 8444), (2052, 2096), (51820, 51830), (1194, 1199),
+        (9050, 9051), (9150, 9151),
     ]
     s = set()
     for a, b in groups:
@@ -53,24 +40,38 @@ def _build_ports():
     return sorted(s)
 
 
-PORTS = _build_ports()
+COMMON_PORTS = _build_common_ports()
+FULL_PORTS = list(range(1, 65536))
+
+# ============ 命令行参数 ============
+parser = argparse.ArgumentParser()
+parser.add_argument('--shard', type=int, default=0)
+parser.add_argument('--shard-total', type=int, default=1)
+args, _ = parser.parse_known_args()
+
+SHARD_INDEX = args.shard
+SHARD_TOTAL = args.shard_total
 
 # ============ 参数 ============
 TCP_TIMEOUT = 3
 VERIFY_TIMEOUT = 20
 VERIFY_RETRY = 0
 VERIFY_DELAY = 1.0
-TCP_WORKERS = 20          # 同时扫描的 IP 数量
-PORT_WORKERS = 10         # 每个 IP 内并发的端口数
+TCP_WORKERS = 20
+PORT_WORKERS = 10
 IP_COOLDOWN = 0.5
 VERIFY_RATE_LIMIT = 1
 
 INPUT_FILE = 'ip_list.txt'
-OUTPUT_FILE = 'working_proxies.txt'
-STATE_FILE = 'progress.json'
-
+PHASE_FILE = 'phase.json'
 RUNNER_TEMP = os.environ.get('RUNNER_TEMP', '/tmp')
-FLAG_FILE = os.path.join(RUNNER_TEMP, 'continue.flag')
+
+if SHARD_TOTAL > 1:
+    STATE_FILE = 'progress_shard%d.json' % SHARD_INDEX
+    OUTPUT_FILE = 'working_proxies_shard%d.txt' % SHARD_INDEX
+else:
+    STATE_FILE = 'progress.json'
+    OUTPUT_FILE = 'working_proxies.txt'
 
 CRLF = '\r\n'
 
@@ -88,8 +89,7 @@ def _clean_note(s):
         return ''
     s = s.replace('\r', ' ').replace('\n', ' ').replace('\t', ' ')
     s = s.replace('@', ' ')
-    s = _WS_RE.sub(' ', s).strip()
-    return s
+    return _WS_RE.sub(' ', s).strip()
 
 
 # ============ IP 解析 ============
@@ -111,7 +111,6 @@ def parse_ip_range(line):
     line = line.strip()
     if not line or line.startswith('#'):
         return None
-
     for tok in line.split():
         if '/' in tok:
             try:
@@ -121,7 +120,6 @@ def parse_ip_range(line):
                 return int(net.network_address), int(net.broadcast_address), ''
             except Exception:
                 pass
-
     m = QQWRY_RANGE_RE.search(line)
     if m:
         a, b = m.group(1), m.group(2)
@@ -132,14 +130,11 @@ def parse_ip_range(line):
             if '|' in line:
                 note = _clean_note(line.split('|', 1)[1])
             return min(sa, sb), max(sa, sb), note
-
     m = SINGLE_IP_RE.search(line)
     if m:
         a = m.group(1)
         if _valid_ipv4(a):
-            sa = int(ipaddress.IPv4Address(a))
-            return sa, sa, ''
-
+            return int(ipaddress.IPv4Address(a)), int(ipaddress.IPv4Address(a)), ''
     return None
 
 
@@ -168,46 +163,37 @@ def load_existing_proxies(path):
                 if not line or line.startswith('@') or line.startswith('#'):
                     continue
                 if '@' in line:
-                    key = line.split('@', 1)[0].strip()
+                    s.add(line.split('@', 1)[0].strip())
                 elif '#' in line:
-                    key = line.split('#', 1)[0].strip()
+                    s.add(line.split('#', 1)[0].strip())
                 else:
                     parts = line.split()
-                    key = parts[0] if parts else ''
-                if key:
-                    s.add(key)
+                    if parts:
+                        s.add(parts[0])
     except Exception:
         pass
     return s
 
 
-# ============ 状态持久化 ============
-def load_state():
-    if not os.path.exists(STATE_FILE):
+# ============ JSON ============
+def load_json(path):
+    if not os.path.exists(path):
         return None
     try:
-        with open(STATE_FILE, 'r', encoding='utf-8') as f:
+        with open(path, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception:
         return None
 
 
-def save_state(state):
+def save_json(path, data):
     try:
-        tmp = STATE_FILE + '.tmp'
+        tmp = path + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, STATE_FILE)
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
     except Exception as e:
-        log('[!] 保存状态失败: %s' % e)
-
-
-def write_flag(value):
-    try:
-        with open(FLAG_FILE, 'w', encoding='utf-8') as f:
-            f.write(value)
-    except Exception as e:
-        log('[!] 写 flag 失败: %s' % e)
+        log('[!] 保存 %s 失败: %s' % (path, e))
 
 
 # ============ 全局读秀请求限速 ============
@@ -229,7 +215,7 @@ def verify_rate_wait():
         time.sleep(min(wait, 0.2))
 
 
-# ============ 扫描核心 ============
+# ============ 扫描 ============
 def tcp_check(ip, port, timeout=TCP_TIMEOUT):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(timeout)
@@ -248,16 +234,12 @@ def tcp_check(ip, port, timeout=TCP_TIMEOUT):
 def verify_duxiu(ip, port, protocol):
     proxy_url = '%s://%s:%d' % (protocol, ip, port)
     proxies = {'http': proxy_url, 'https': proxy_url}
-
     if VERIFY_DELAY > 0:
         time.sleep(VERIFY_DELAY)
     verify_rate_wait()
-
     try:
-        r = requests.get(
-            DUXIU_URL, proxies=proxies, timeout=VERIFY_TIMEOUT,
-            headers={'User-Agent': UA}, allow_redirects=True,
-        )
+        r = requests.get(DUXIU_URL, proxies=proxies, timeout=VERIFY_TIMEOUT,
+                         headers={'User-Agent': UA}, allow_redirects=True)
         if r.status_code != 200:
             return False
         try:
@@ -282,16 +264,54 @@ def scan_ip_port(ip, port):
     return None
 
 
+# ============ 分片 IP 分配 ============
+def slice_ranges(ranges, shard_index, shard_total):
+    """把 IP 范围按顺序切分，返回第 shard_index 片的 [(s, e, note), ...]"""
+    if shard_total <= 1:
+        return ranges
+    total = sum(e - s + 1 for s, e, _ in ranges)
+    shard_size = (total + shard_total - 1) // shard_total
+    lo = shard_index * shard_size
+    hi = min(lo + shard_size, total)
+    if lo >= hi:
+        return []
+    result = []
+    cursor = 0
+    for s, e, note in ranges:
+        span = e - s + 1
+        seg_lo = cursor
+        seg_hi = cursor + span
+        if seg_hi <= lo or seg_lo >= hi:
+            cursor = seg_hi
+            continue
+        local_lo = max(0, lo - seg_lo)
+        local_hi = min(span, hi - seg_lo)
+        result.append((s + local_lo, s + local_hi - 1, note))
+        cursor = seg_hi
+    return result
+
+
 def main():
     if not os.path.exists(INPUT_FILE):
         log('未找到 %s' % INPUT_FILE)
         sys.exit(1)
 
-    ranges = load_ip_ranges(INPUT_FILE)
-    if not ranges:
+    all_ranges = load_ip_ranges(INPUT_FILE)
+    if not all_ranges:
         log('未读取到有效 IP 范围')
         sys.exit(1)
 
+    # 读 phase
+    phase_state = load_json(PHASE_FILE) or {
+        'current': 'common',
+        'common_completed': False,
+        'full_completed': False,
+    }
+    current_phase = phase_state.get('current', 'common')
+    PORTS = COMMON_PORTS if current_phase == 'common' else FULL_PORTS
+
+    # 分片
+    ranges = slice_ranges(all_ranges, SHARD_INDEX, SHARD_TOTAL)
     total_ips = sum(e - s + 1 for s, e, _ in ranges)
     total_tasks = total_ips * len(PORTS)
 
@@ -306,10 +326,12 @@ def main():
         s, e, note = ranges[idx]
         return s + (pos - range_cum[idx]), note
 
-    # ============ 恢复 / 新一轮 ============
-    state = load_state()
+    # 恢复 / 重置
+    state = load_json(STATE_FILE)
     new_round = True
-    if state and not state.get('completed') and state.get('total_ips') == total_ips:
+    if (state and not state.get('completed')
+            and state.get('total_ips') == total_ips
+            and state.get('phase') == current_phase):
         new_round = False
 
     if new_round:
@@ -319,38 +341,38 @@ def main():
             'total_ips': total_ips,
             'total_tasks': total_tasks,
             'ports_count': len(PORTS),
+            'phase': current_phase,
+            'shard_index': SHARD_INDEX,
+            'shard_total': SHARD_TOTAL,
             'started_at': time.strftime('%Y-%m-%d %H:%M:%S'),
             'completed': False,
-            'completed_at': None,
             'session': 1,
         }
         with open(OUTPUT_FILE, 'w', encoding='utf-8', newline='') as f:
-            f.write('@ 读秀代理扫描结果' + CRLF)
-            f.write('@ 格式: ip:port@protocol@归属地' + CRLF)
+            f.write('@ 读秀代理扫描结果 [分片 %d/%d]' % (SHARD_INDEX, SHARD_TOTAL) + CRLF)
+            f.write('@ 阶段: %s' % current_phase + CRLF)
             f.write('@ 开始时间: %s' % state['started_at'] + CRLF)
             f.write('@' + '-' * 58 + CRLF)
         existing = set()
-        log('=== 新一轮扫描 ===')
+        log('=== 新一轮扫描 [分片 %d/%d, phase=%s] ==='
+            % (SHARD_INDEX, SHARD_TOTAL, current_phase))
     else:
         state['session'] = state.get('session', 1) + 1
         existing = load_existing_proxies(OUTPUT_FILE)
-        log('=== 续跑 (session %d) ===' % state['session'])
+        log('=== 续跑 [分片 %d/%d, phase=%s, session %d] ==='
+            % (SHARD_INDEX, SHARD_TOTAL, current_phase, state['session']))
         log('上次位置: %d / %d (%.1f%%)'
             % (state['position'], total_ips,
-               state['position'] * 100.0 / total_ips))
+               state['position'] * 100.0 / total_ips if total_ips else 0))
 
-    log('IP 段数: %d' % len(ranges))
-    log('IP 总数: %d' % total_ips)
+    log('本片 IP 段数: %d' % len(ranges))
+    log('本片 IP 总数: %d' % total_ips)
     log('端口数: %d' % len(PORTS))
     log('任务总量: %d' % total_tasks)
     log('本次起点: IP #%d' % state['position'])
     log('已找到代理: %d' % len(existing))
-    log('IP 并发: %d  ×  端口并发: %d  =  全局最大 %d 条连接'
-        % (TCP_WORKERS, PORT_WORKERS, TCP_WORKERS * PORT_WORKERS))
-    log('TCP 超时: %d s | 验证超时: %d s | 验证重试: %d'
-        % (TCP_TIMEOUT, VERIFY_TIMEOUT, VERIFY_RETRY))
-    log('读秀限速: %d 次/秒' % VERIFY_RATE_LIMIT if VERIFY_RATE_LIMIT > 0 else '不限速')
-    log('每 IP 冷却: %.1f s' % IP_COOLDOWN)
+    log('IP 并发: %d  ×  端口并发: %d' % (TCP_WORKERS, PORT_WORKERS))
+    log('TCP 超时: %d s | 验证超时: %d s' % (TCP_TIMEOUT, VERIFY_TIMEOUT))
     log('最大运行时长: %d 秒 (%.2f 小时)'
         % (MAX_RUNTIME_SEC, MAX_RUNTIME_SEC / 3600.0))
     log('-' * 60)
@@ -380,14 +402,12 @@ def main():
                 return
             ip_int, note = ip_at_position(p)
             ip = ip_int_to_str(ip_int)
-
             pending = []
             for port in PORTS:
                 key = '%s:%d' % (ip, port)
                 if key in existing:
                     continue
                 pending.append((port, port_pool.submit(scan_ip_port, ip, port)))
-
             for port, fut in pending:
                 if stop_flag[0]:
                     return
@@ -408,11 +428,11 @@ def main():
                         log('[+] ' + line_out)
                 with found_lock:
                     scanned[0] += 1
-                    if scanned[0] % 500 == 0:
+                    if scanned[0] % 2000 == 0:
                         elapsed = time.time() - t0
                         speed = scanned[0] / elapsed if elapsed > 0 else 0
                         done_now = state['position'] + scanned[0] / len(PORTS)
-                        pct = done_now * 100.0 / total_ips
+                        pct = done_now * 100.0 / total_ips if total_ips else 0
                         log('[进度] 本 session %d 任务 | 全局 %.2f%% | '
                             '找到 %d | %.2f task/s | %.0f s'
                             % (scanned[0], pct, found_count[0], speed, elapsed))
@@ -449,24 +469,21 @@ def main():
         state['completed'] = True
         state['completed_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
         log('=' * 60)
-        log('一轮扫描完成！')
-        write_flag('done')
+        log('[分片 %d/%d] 本阶段本片扫描完成！' % (SHARD_INDEX, SHARD_TOTAL))
     else:
         log('=' * 60)
-        log('本次 session 结束，剩余 %d 个 IP 待扫'
-            % (total_ips - state['position']))
-        log('将自动无缝续跑（下一轮 workflow）')
-        write_flag('continue')
+        log('[分片 %d/%d] 本次 session 结束，剩余 %d 个 IP'
+            % (SHARD_INDEX, SHARD_TOTAL, total_ips - state['position']))
 
-    save_state(state)
+    save_json(STATE_FILE, state)
 
     dt = time.time() - t0
     log('-' * 60)
     log('本 session 耗时: %.1f 秒 (%.2f 小时)' % (dt, dt / 3600.0))
     log('累计找到代理: %d' % found_count[0])
-    log('全局进度: %d/%d (%.1f%%)'
+    log('本片进度: %d/%d (%.1f%%)'
         % (state['position'], total_ips,
-           state['position'] * 100.0 / total_ips))
+           state['position'] * 100.0 / total_ips if total_ips else 0))
 
 
 if __name__ == '__main__':
