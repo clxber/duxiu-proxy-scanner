@@ -3,6 +3,7 @@
 高校代理扫描器 —— 分片 + 两阶段 + 断点续跑 + 存活 IP 预筛
 common 阶段：12 探针端口，快速筛出存活 IP
 full 阶段：存活 IP 的全 65535 端口，找代理
+读秀验证：只用 '读秀学术搜索' 一个关键词
 """
 
 import os
@@ -21,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ============ 配置 ============
 DUXIU_URL = 'http://www.duxiu.com/'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-DUXIU_KEYWORDS = ['读秀学术搜索', '超星', '读秀知识库']
+DUXIU_KEYWORDS = ['读秀学术搜索']
 
 MAX_RUNTIME_SEC = int(os.environ.get('MAX_RUNTIME_SEC', 20880))
 
@@ -29,18 +30,8 @@ MAX_RUNTIME_SEC = int(os.environ.get('MAX_RUNTIME_SEC', 20880))
 def _build_common_ports():
     """12 个探针端口：只用最常见的服务端口判断 IP 是否活着"""
     return [
-        22,     # SSH（服务器基本都开）
-        80,     # HTTP（校园网站）
-        443,    # HTTPS
-        3389,   # RDP
-        1080,   # SOCKS 代理
-        1081,
-        8080,   # HTTP 代理（最常见）
-        8081,
-        7890,   # Clash 默认
-        3128,   # Squid 代理
-        8000,   # 通用 HTTP
-        8443,   # 通用 HTTPS
+        22, 80, 443, 3389, 1080, 1081, 8080, 8081,
+        7890, 3128, 8000, 8443,
     ]
 
 
