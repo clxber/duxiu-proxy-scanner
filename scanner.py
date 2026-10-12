@@ -268,10 +268,11 @@ def _build_curl_args(ip, port, protocol):
     if protocol == 'http':
         return ['-x', address, 'http://myip.ipip.net']
     if protocol == 'socks5':
-        # 关键：用 --socks5-hostname 让代理做 DNS 解析
+        # socks5-hostname 让代理做 DNS 解析
         return ['--socks5-hostname', address, 'http://myip.ipip.net']
     if protocol == 'socks4':
-        return ['--socks4', address, 'http://myip.ipip.net']
+        # socks4a 让代理做 DNS 解析
+        return ['--socks4a', address, 'http://myip.ipip.net']
     return None
 
 
@@ -283,7 +284,7 @@ def verify_proxy(ip, port, protocol):
     cmd = [
         CURL,
         '-sS',
-        '-L',                    # 跟随重定向
+        '-L',
         '-4',
         '--connect-timeout', str(CONNECT_TIMEOUT),
         '--max-time', str(MAX_TIME),
