@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 高校代理扫描器 —— 分片 + 两阶段 + 断点续跑 + 存活 IP 预筛
-- 8 分片：按 IP 切分，每片独立，同一 IP 不被两片同时扫
-- 阶段：common（171 端口，探活 + 找代理） → full（65535 端口，仅扫 common 存活 IP）
-- 被 5.8h 截断 → 自动续跑；两阶段都完成 → 停，等手动触发
+修复：
+  - 探针端口加入 22/80/443（判断 IP 存活的最基本标志）
+  - open_ips 为空时也写空文件（full 阶段读到空文件直接跳过本片）
 """
 
 import os
@@ -29,6 +29,12 @@ MAX_RUNTIME_SEC = int(os.environ.get('MAX_RUNTIME_SEC', 20880))
 
 def _build_common_ports():
     groups = [
+        # === 探针端口（判断 IP 是否活着，最常用）===
+        (22, 22),      # SSH（服务器都开）
+        (80, 80),      # HTTP（校园网站）
+        (443, 443),    # HTTPS
+        (3389, 3389),  # RDP
+        # === 代理常用端口 ===
         (1080, 1090), (10808, 10820), (7890, 7899), (8080, 8090),
         (8000, 8010), (8888, 8890), (9000, 9010), (9090, 9099),
         (10000, 10010), (10080, 10086), (3128, 3130), (8388, 8389),
@@ -346,7 +352,24 @@ def main():
                            if ip_int_to_str(ip_int) in wanted]
                 log('[full] 存活 IP 预筛: %d → %d' % (before, len(ip_list)))
             else:
-                log('[full] open_ips 文件为空，扫描全部 IP')
+                # ★ open_ips 文件为空 = 本片没有存活 IP，跳过
+                log('[full] open_ips 文件为空，本片无存活 IP，直接标记完成')
+                state = {
+                    'position': 0,
+                    'done': 0,
+                    'total_ips': 0,
+                    'total_tasks': 0,
+                    'ports_count': len(FULL_PORTS),
+                    'phase': 'full',
+                    'shard_index': SHARD_INDEX,
+                    'shard_total': SHARD_TOTAL,
+                    'started_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'completed': True,
+                    'completed_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'session': 1,
+                }
+                save_json(STATE_FILE, state)
+                return
         else:
             log('[full] 无 open_ips 文件，扫描全部 IP（首次跑或老版本）')
 
@@ -419,7 +442,7 @@ def main():
     stop_flag = [False]
     t0 = time.time()
 
-    # 存活 IP 收集（仅 common 阶段用）
+    # 存活 IP 收集
     open_ips_lock = threading.Lock()
     open_ips = set()
 
@@ -479,7 +502,6 @@ def main():
                             '找到 %d | %.2f task/s | %.0f s'
                             % (scanned[0], pct, found_count[0], speed, elapsed))
 
-            # common 阶段记录存活 IP
             if current_phase == 'common' and ip_has_open:
                 with open_ips_lock:
                     open_ips.add(ip)
@@ -525,10 +547,9 @@ def main():
 
     save_json(STATE_FILE, state)
 
-    # common 阶段完成时，写存活 IP 文件（追加写入，保留之前 session 的存活 IP）
-    if current_phase == 'common' and open_ips:
+    # ★ common 阶段完成时，无论 open_ips 是否为空，都写文件
+    if current_phase == 'common' and state.get('completed'):
         try:
-            # 读取已有内容
             existing_open = set()
             if os.path.exists(OPEN_IPS_FILE):
                 with open(OPEN_IPS_FILE, 'r', encoding='utf-8', errors='ignore') as f:
