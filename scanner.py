@@ -66,7 +66,6 @@ args, _ = parser.parse_known_args()
 SHARD_INDEX = args.shard
 SHARD_TOTAL = args.shard_total
 
-# ============ 超时 / 并发 ============
 TCP_TIMEOUT = 3
 VERIFY_TIMEOUT = 30
 VERIFY_RETRY = 0
@@ -196,7 +195,6 @@ def load_existing_proxies(path):
 
 
 def load_ip_set(path):
-    """读一个 IP 列表文件为集合"""
     s = set()
     if not os.path.exists(path):
         return s
@@ -265,11 +263,13 @@ def tcp_check(ip, port, timeout=TCP_TIMEOUT):
 
 
 def _build_curl_args(ip, port, protocol):
+    """3 种协议的 curl 参数"""
     address = '%s:%d' % (ip, port)
     if protocol == 'http':
         return ['-x', address, 'http://myip.ipip.net']
     if protocol == 'socks5':
-        return ['--socks5', address, 'http://myip.ipip.net']
+        # 关键：用 --socks5-hostname 让代理做 DNS 解析
+        return ['--socks5-hostname', address, 'http://myip.ipip.net']
     if protocol == 'socks4':
         return ['--socks4', address, 'http://myip.ipip.net']
     return None
@@ -281,7 +281,10 @@ def verify_proxy(ip, port, protocol):
         return False
     verify_rate_wait()
     cmd = [
-        CURL, '-sS', '-4',
+        CURL,
+        '-sS',
+        '-L',                    # 跟随重定向
+        '-4',
         '--connect-timeout', str(CONNECT_TIMEOUT),
         '--max-time', str(MAX_TIME),
         '-A', UA,
@@ -340,17 +343,13 @@ def expand_ranges_to_ips(ranges):
     return flat
 
 
-# ============ 阶段配置 ============
 def get_phase_config(phase):
-    """
-    返回 (PORTS, 上游过滤文件, 本阶段产出文件, 阶段说明)
-    """
     if phase == 'common':
         return COMMON_PORTS, None, OPEN_IPS_FILE, '12 探针端口（筛存活 IP）'
     elif phase == 'proxy':
         return PROXY_PORTS, OPEN_IPS_FILE, PROXY_MISSING_FILE, '171 常见代理端口（只扫存活 IP）'
     elif phase == 'full':
-        return FULL_PORTS, PROXY_MISSING_FILE, None, '65535 全端口（只扫 proxy 阶段未找到代理的 IP）'
+        return FULL_PORTS, PROXY_MISSING_FILE, None, '65535 全端口（只扫 proxy 未找到代理的 IP）'
     else:
         raise ValueError('未知阶段: %s' % phase)
 
@@ -377,7 +376,6 @@ def main():
     ranges = slice_ranges(all_ranges, SHARD_INDEX, SHARD_TOTAL)
     ip_list = expand_ranges_to_ips(ranges)
 
-    # 上游过滤：只保留上游文件里列出的 IP（common 阶段无上游）
     if upstream_file is not None:
         if os.path.exists(upstream_file):
             wanted = load_ip_set(upstream_file)
@@ -399,7 +397,6 @@ def main():
                     'session': 1,
                 }
                 save_json(STATE_FILE, state)
-                # 空产出文件也要写（下游能读到空文件直接跳过）
                 if output_filter_file:
                     with open(output_filter_file, 'w', encoding='utf-8', newline='') as f:
                         pass
@@ -474,11 +471,10 @@ def main():
     stop_flag = [False]
     t0 = time.time()
 
-    # 本阶段产出
     open_ips_lock = threading.Lock()
-    open_ips = set()            # common 阶段：存活 IP
-    proxy_found_ips = set()     # proxy 阶段：找到代理的 IP
-    proxy_missing_ips = set()   # proxy 阶段：没找到代理的 IP
+    open_ips = set()
+    proxy_found_ips = set()
+    proxy_missing_ips = set()
 
     def next_position():
         with pos_lock:
@@ -546,7 +542,6 @@ def main():
                         log('[进度] 本 session %d 任务 | 全局 %.2f%% | %s | 代理 %d | %.2f task/s | %.0f s'
                             % (scanned[0], pct, extra, found_count[0], speed, elapsed))
 
-            # 记录本阶段产出
             if current_phase == 'common':
                 if ip_has_open:
                     with open_ips_lock:
@@ -556,7 +551,6 @@ def main():
                     if ip_has_proxy:
                         proxy_found_ips.add(ip)
                     elif ip_has_open:
-                        # 端口开放但没找到代理 → 需要深扫
                         proxy_missing_ips.add(ip)
 
             if IP_COOLDOWN > 0:
@@ -602,7 +596,6 @@ def main():
 
     save_json(STATE_FILE, state)
 
-    # 写产出文件（跨 session 累积，追加模式）
     if current_phase == 'common' and state.get('completed'):
         try:
             existing_open = load_ip_set(OPEN_IPS_FILE)
@@ -619,7 +612,6 @@ def main():
 
     elif current_phase == 'proxy' and state.get('completed'):
         try:
-            # 累积已有的待深扫列表
             existing_missing = load_ip_set(PROXY_MISSING_FILE)
             existing_missing.update(proxy_missing_ips)
             with open(PROXY_MISSING_FILE, 'w', encoding='utf-8', newline='') as f:
