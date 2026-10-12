@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-高校代理扫描器 —— 分片 + 两阶段 + 断点续跑
-分片：按 IP 切分，每片独立，同一 IP 不被两片同时扫
-阶段：common（171 端口） → full（65535 端口）
+高校代理扫描器 —— 分片 + 两阶段 + 断点续跑 + 存活 IP 预筛
+- 8 分片：按 IP 切分，每片独立，同一 IP 不被两片同时扫
+- 阶段：common（171 端口，探活 + 找代理） → full（65535 端口，仅扫 common 存活 IP）
+- 被 5.8h 截断 → 自动续跑；两阶段都完成 → 停，等手动触发
 """
 
 import os
@@ -43,7 +44,6 @@ def _build_common_ports():
 COMMON_PORTS = _build_common_ports()
 FULL_PORTS = list(range(1, 65536))
 
-# ============ 命令行参数 ============
 parser = argparse.ArgumentParser()
 parser.add_argument('--shard', type=int, default=0)
 parser.add_argument('--shard-total', type=int, default=1)
@@ -69,9 +69,11 @@ RUNNER_TEMP = os.environ.get('RUNNER_TEMP', '/tmp')
 if SHARD_TOTAL > 1:
     STATE_FILE = 'progress_shard%d.json' % SHARD_INDEX
     OUTPUT_FILE = 'working_proxies_shard%d.txt' % SHARD_INDEX
+    OPEN_IPS_FILE = 'open_ips_shard%d.txt' % SHARD_INDEX
 else:
     STATE_FILE = 'progress.json'
     OUTPUT_FILE = 'working_proxies.txt'
+    OPEN_IPS_FILE = 'open_ips.txt'
 
 CRLF = '\r\n'
 
@@ -215,7 +217,7 @@ def verify_rate_wait():
         time.sleep(min(wait, 0.2))
 
 
-# ============ 扫描 ============
+# ============ 扫描核心 ============
 def tcp_check(ip, port, timeout=TCP_TIMEOUT):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(timeout)
@@ -256,17 +258,21 @@ def verify_duxiu(ip, port, protocol):
 
 
 def scan_ip_port(ip, port):
+    """
+    返回 (is_open, result)
+      is_open: TCP 端口是否开放
+      result:  (ip, port, proto) 如果读秀验证通过；否则 None
+    """
     if not tcp_check(ip, port):
-        return None
+        return False, None
     for proto in ('http', 'socks5', 'socks4'):
         if verify_duxiu(ip, port, proto):
-            return (ip, port, proto)
-    return None
+            return True, (ip, port, proto)
+    return True, None
 
 
 # ============ 分片 IP 分配 ============
 def slice_ranges(ranges, shard_index, shard_total):
-    """把 IP 范围按顺序切分，返回第 shard_index 片的 [(s, e, note), ...]"""
     if shard_total <= 1:
         return ranges
     total = sum(e - s + 1 for s, e, _ in ranges)
@@ -291,6 +297,15 @@ def slice_ranges(ranges, shard_index, shard_total):
     return result
 
 
+def expand_ranges_to_ips(ranges):
+    """把 [(s, e, note), ...] 展开成 [(ip_int, note), ...]"""
+    flat = []
+    for s, e, note in ranges:
+        for ip_int in range(s, e + 1):
+            flat.append((ip_int, note))
+    return flat
+
+
 def main():
     if not os.path.exists(INPUT_FILE):
         log('未找到 %s' % INPUT_FILE)
@@ -312,19 +327,34 @@ def main():
 
     # 分片
     ranges = slice_ranges(all_ranges, SHARD_INDEX, SHARD_TOTAL)
-    total_ips = sum(e - s + 1 for s, e, _ in ranges)
+
+    # 展开为 IP 列表
+    ip_list = expand_ranges_to_ips(ranges)
+
+    # full 阶段：读存活 IP 列表，只扫这些
+    if current_phase == 'full':
+        if os.path.exists(OPEN_IPS_FILE):
+            wanted = set()
+            with open(OPEN_IPS_FILE, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        wanted.add(line)
+            if wanted:
+                before = len(ip_list)
+                ip_list = [(ip_int, note) for (ip_int, note) in ip_list
+                           if ip_int_to_str(ip_int) in wanted]
+                log('[full] 存活 IP 预筛: %d → %d' % (before, len(ip_list)))
+            else:
+                log('[full] open_ips 文件为空，扫描全部 IP')
+        else:
+            log('[full] 无 open_ips 文件，扫描全部 IP（首次跑或老版本）')
+
+    total_ips = len(ip_list)
     total_tasks = total_ips * len(PORTS)
 
-    range_cum = []
-    acc = 0
-    for s, e, _ in ranges:
-        range_cum.append(acc)
-        acc += e - s + 1
-
     def ip_at_position(pos):
-        idx = bisect.bisect_right(range_cum, pos) - 1
-        s, e, note = ranges[idx]
-        return s + (pos - range_cum[idx]), note
+        return ip_list[pos]
 
     # 恢复 / 重置
     state = load_json(STATE_FILE)
@@ -371,8 +401,12 @@ def main():
     log('任务总量: %d' % total_tasks)
     log('本次起点: IP #%d' % state['position'])
     log('已找到代理: %d' % len(existing))
-    log('IP 并发: %d  ×  端口并发: %d' % (TCP_WORKERS, PORT_WORKERS))
-    log('TCP 超时: %d s | 验证超时: %d s' % (TCP_TIMEOUT, VERIFY_TIMEOUT))
+    log('IP 并发: %d  ×  端口并发: %d  =  全局最大 %d 条连接'
+        % (TCP_WORKERS, PORT_WORKERS, TCP_WORKERS * PORT_WORKERS))
+    log('TCP 超时: %d s | 验证超时: %d s | 验证重试: %d'
+        % (TCP_TIMEOUT, VERIFY_TIMEOUT, VERIFY_RETRY))
+    log('读秀限速: %d 次/秒' % VERIFY_RATE_LIMIT if VERIFY_RATE_LIMIT > 0 else '不限速')
+    log('每 IP 冷却: %.1f s' % IP_COOLDOWN)
     log('最大运行时长: %d 秒 (%.2f 小时)'
         % (MAX_RUNTIME_SEC, MAX_RUNTIME_SEC / 3600.0))
     log('-' * 60)
@@ -384,6 +418,10 @@ def main():
     scanned = [0]
     stop_flag = [False]
     t0 = time.time()
+
+    # 存活 IP 收集（仅 common 阶段用）
+    open_ips_lock = threading.Lock()
+    open_ips = set()
 
     def next_position():
         with pos_lock:
@@ -408,13 +446,17 @@ def main():
                 if key in existing:
                     continue
                 pending.append((port, port_pool.submit(scan_ip_port, ip, port)))
+
+            ip_has_open = False
             for port, fut in pending:
                 if stop_flag[0]:
                     return
                 try:
-                    r = fut.result()
+                    is_open, r = fut.result()
                 except Exception:
-                    r = None
+                    is_open, r = False, None
+                if is_open:
+                    ip_has_open = True
                 if r:
                     with found_lock:
                         existing.add('%s:%d' % (r[0], r[1]))
@@ -436,6 +478,12 @@ def main():
                         log('[进度] 本 session %d 任务 | 全局 %.2f%% | '
                             '找到 %d | %.2f task/s | %.0f s'
                             % (scanned[0], pct, found_count[0], speed, elapsed))
+
+            # common 阶段记录存活 IP
+            if current_phase == 'common' and ip_has_open:
+                with open_ips_lock:
+                    open_ips.add(ip)
+
             if IP_COOLDOWN > 0:
                 time.sleep(IP_COOLDOWN)
 
@@ -476,6 +524,26 @@ def main():
             % (SHARD_INDEX, SHARD_TOTAL, total_ips - state['position']))
 
     save_json(STATE_FILE, state)
+
+    # common 阶段完成时，写存活 IP 文件（追加写入，保留之前 session 的存活 IP）
+    if current_phase == 'common' and open_ips:
+        try:
+            # 读取已有内容
+            existing_open = set()
+            if os.path.exists(OPEN_IPS_FILE):
+                with open(OPEN_IPS_FILE, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            existing_open.add(line)
+            existing_open.update(open_ips)
+            with open(OPEN_IPS_FILE, 'w', encoding='utf-8', newline='') as f:
+                for ip in sorted(existing_open):
+                    f.write(ip + CRLF)
+            log('存活 IP 列表已更新: %s (本 session %d 个, 累计 %d 个)'
+                % (OPEN_IPS_FILE, len(open_ips), len(existing_open)))
+        except Exception as e:
+            log('[!] 写存活 IP 文件失败: %s' % e)
 
     dt = time.time() - t0
     log('-' * 60)
