@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 合并 8 个分片结果，判断阶段推进 / 触发下一轮 / 清理
-三阶段：common → proxy → full
+四阶段：common → revalidate → proxy → full
 """
 
 import os
@@ -66,6 +66,7 @@ def cleanup_shard_files():
     patterns = [
         'progress_shard*.json',
         'open_ips_shard*.txt',
+        'open_ips_revalidated_shard*.txt',
         'proxy_missing_shard*.txt',
         'working_proxies_shard*.txt',
     ]
@@ -84,6 +85,7 @@ def main():
     phase_state = load_json(PHASE_FILE) or {
         'current': 'common',
         'common_completed': False,
+        'revalidate_completed': False,
         'proxy_completed': False,
         'full_completed': False,
     }
@@ -106,9 +108,12 @@ def main():
     # 统计各阶段产出
     total_open = sum(count_file_lines('open_ips_shard%d.txt' % i)
                      for i in range(SHARD_TOTAL))
+    total_rev = sum(count_file_lines('open_ips_revalidated_shard%d.txt' % i)
+                    for i in range(SHARD_TOTAL))
     total_missing = sum(count_file_lines('proxy_missing_shard%d.txt' % i)
                         for i in range(SHARD_TOTAL))
     log('存活 IP 总数: %d' % total_open)
+    log('重验存活 IP 总数: %d' % total_rev)
     log('待深扫 IP 总数: %d' % total_missing)
 
     # 合并所有分片结果到 working_proxies.txt
@@ -146,15 +151,32 @@ def main():
             if total_open == 0:
                 log('common 完成，0 存活 IP → 结束（IP 全死）')
                 phase_state['common_completed'] = True
+                phase_state['revalidate_completed'] = True
                 phase_state['proxy_completed'] = True
                 phase_state['full_completed'] = True
                 save_json(PHASE_FILE, phase_state)
                 trigger = 'no'
                 should_cleanup = True
             else:
-                log('common 完成，%d 存活 IP → 切 proxy' % total_open)
-                phase_state['current'] = 'proxy'
+                log('common 完成，%d 存活 IP → 切 revalidate' % total_open)
+                phase_state['current'] = 'revalidate'
                 phase_state['common_completed'] = True
+                save_json(PHASE_FILE, phase_state)
+                trigger = 'yes'
+
+        elif current_phase == 'revalidate':
+            if total_rev == 0:
+                log('revalidate 完成，0 重验存活 IP → 结束')
+                phase_state['revalidate_completed'] = True
+                phase_state['proxy_completed'] = True
+                phase_state['full_completed'] = True
+                save_json(PHASE_FILE, phase_state)
+                trigger = 'no'
+                should_cleanup = True
+            else:
+                log('revalidate 完成，%d 个重验存活 IP → 切 proxy' % total_rev)
+                phase_state['current'] = 'proxy'
+                phase_state['revalidate_completed'] = True
                 save_json(PHASE_FILE, phase_state)
                 trigger = 'yes'
 
@@ -188,6 +210,7 @@ def main():
         save_json(PHASE_FILE, {
             'current': 'common',
             'common_completed': False,
+            'revalidate_completed': False,
             'proxy_completed': False,
             'full_completed': False,
         })
