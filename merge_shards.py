@@ -1,6 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 合并 8 个分片结果，判断是否要切 phase / 触发下一轮
+
+判断逻辑：
+  common 阶段全部完成：
+    ├─ 有结果 → 结束
+    ├─ 0 结果 + open_ips 全空 → 结束（无存活 IP，full 无意义）
+    └─ 0 结果 + open_ips 有存活 → 切 full
+  full 阶段全部完成 → 结束
 """
 
 import os
@@ -49,6 +56,19 @@ def read_shard_results(idx):
     return lines
 
 
+def count_open_ips(idx):
+    """统计某个分片的存活 IP 数"""
+    path = 'open_ips_shard%d.txt' % idx
+    if not os.path.exists(path):
+        return 0
+    n = 0
+    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        for line in f:
+            if line.strip():
+                n += 1
+    return n
+
+
 def main():
     phase_state = load_json(PHASE_FILE) or {
         'current': 'common',
@@ -67,6 +87,16 @@ def main():
 
     log('阶段: %s' % current_phase)
     log('全部分片完成: %s' % all_done)
+
+    # 统计存活 IP 数
+    total_open = 0
+    open_per_shard = []
+    for i in range(SHARD_TOTAL):
+        n = count_open_ips(i)
+        open_per_shard.append(n)
+        total_open += n
+    log('各分片存活 IP: %s' % open_per_shard)
+    log('存活 IP 总数: %d' % total_open)
 
     # 合并所有分片结果到 working_proxies.txt（重建）
     all_lines = []
@@ -94,17 +124,24 @@ def main():
     trigger = 'no'
     if all_done:
         if current_phase == 'common':
-            if len(all_lines) == 0:
-                log('phase common 全部完成且 0 结果 → 切换到 full')
-                phase_state['current'] = 'full'
-                phase_state['common_completed'] = True
-                save_json(PHASE_FILE, phase_state)
-                trigger = 'yes'
-            else:
+            if len(all_lines) > 0:
                 log('phase common 完成，有 %d 条结果 → 结束' % len(all_lines))
                 phase_state['common_completed'] = True
                 save_json(PHASE_FILE, phase_state)
                 trigger = 'no'
+            elif total_open == 0:
+                log('phase common 完成，0 结果且 0 存活 IP → 结束（IP 全死，full 无意义）')
+                phase_state['common_completed'] = True
+                phase_state['full_completed'] = True
+                save_json(PHASE_FILE, phase_state)
+                trigger = 'no'
+            else:
+                log('phase common 完成，0 结果但有 %d 个存活 IP → 切换 full'
+                    % total_open)
+                phase_state['current'] = 'full'
+                phase_state['common_completed'] = True
+                save_json(PHASE_FILE, phase_state)
+                trigger = 'yes'
         elif current_phase == 'full':
             log('phase full 全部完成 → 结束')
             phase_state['full_completed'] = True
