@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-高校代理扫描器 —— 三阶段 + 分片 + 断点续跑 + 短路优化
-阶段 1 common：约 400 探针端口（TCP 探活，发现 1 个 open 立即跳过剩余端口）
-阶段 2 proxy ：171 常见代理端口（只扫存活 IP，必须扫完所有端口）
-阶段 3 full  ：65535 全端口（只扫 proxy 未找到代理的 IP，必须扫完所有端口）
+高校代理扫描器 —— 三阶段 + 分片 + 断点续跑
+阶段 1 common：12 探针 + 171 代理端口（TCP 探活，发现 1 个 open 立即跳）
+阶段 2 proxy ：171 代理端口（完整扫描 + 代理验证，必须扫完）
+阶段 3 full  ：65535 全端口（只扫 proxy 未找到代理的 IP）
 验证方式：curl，3 种协议（http / socks5 / socks4）
 验证目标：http://myip.ipip.net
 """
@@ -28,84 +28,16 @@ MAX_TIME = 15
 
 MAX_RUNTIME_SEC = int(os.environ.get('MAX_RUNTIME_SEC', 20880))
 
-PROBE_BATCH_SIZE = 50
-SCAN_BATCH_SIZE = 30
+PROBE_BATCH_SIZE = 30
 
 
-def _build_common_ports():
-    """约 400 探针端口，优先级排序"""
-    priority = [
-        80, 443, 22, 8080, 3389, 8443, 8000, 8888, 3128, 1080,
-        8081, 8001, 8082, 8083, 8880, 9000, 9090, 7890, 10808,
-        81, 8008, 8009, 8088, 8090, 9443, 10443, 18080,
-        5000, 5060, 3000, 4000, 5432, 3306, 6379, 27017, 1433, 1521,
-        21, 23, 25, 110, 143, 465, 587, 993, 995, 5900, 5901,
-    ]
-
-    others = set()
-    others.update([20, 53, 69, 79, 88, 111, 119, 123, 135, 137, 138, 139,
-                   161, 162, 179, 194, 389, 445, 500, 512, 513, 514, 515,
-                   520, 548, 554, 623, 631, 636, 873, 989, 990, 1025])
-    others.update([1434, 1701, 1723, 1883, 1900, 2049, 2082, 2083, 2121,
-                   2181, 2222, 2375, 2376, 2480, 3001, 3260, 3478, 3479,
-                   3480, 3690, 4040, 4443, 4444, 4505, 4506, 4711, 4848,
-                   5001, 5222, 5228, 5357, 5555, 5672, 5678, 5800, 5984,
-                   5985, 5986, 6000, 6443, 7001, 7002, 7070, 7443, 7474,
-                   7680])
-    others.update([8002, 8003, 8004, 8005, 8006, 8007, 8010, 8043, 8069,
-                   8084, 8085, 8086, 8087, 8089, 8091, 8092, 8093, 8094,
-                   8095, 8096, 8097, 8098, 8099, 8100, 8118, 8123, 8161,
-                   8180, 8200, 8222, 8243, 8280, 8333, 8400, 8444, 8500,
-                   8529, 8580, 8600, 8800, 8834, 8843, 8850, 8881, 8882,
-                   8883, 8884, 8885, 8886, 8887, 8889, 8890, 8900, 8983])
-    others.update([9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009,
-                   9010, 9042, 9043, 9060, 9080, 9091, 9092, 9093, 9094,
-                   9095, 9096, 9097, 9098, 9099, 9100, 9200, 9300, 9400,
-                   9500, 9600, 9800, 9999, 1081, 1082, 1083, 1084,
-                   1085, 1086, 1087, 1088, 1089, 1090, 10809, 10810,
-                   10811, 10812, 10813, 10814, 10815, 10816, 10817, 10818,
-                   10819, 10820, 11211, 11311, 12000, 12345, 13306, 14000,
-                   14147, 14265, 15000, 15001, 16379, 16992, 16993, 17000,
-                   17698, 18081, 18082, 18083, 18084, 18085, 18086, 18087,
-                   18088, 18089, 18090, 18091, 18092, 18093, 18094, 18095,
-                   19090, 19132, 20000, 20202, 20520, 20600, 23791, 25000,
-                   25143, 25565, 26000, 26379, 27018, 27019, 27080, 28017,
-                   30001, 31280, 32100, 32768, 32800, 33000, 33890, 34443,
-                   34567, 36379, 38080, 38081, 38082, 38083, 38084, 38085,
-                   38086, 38087, 38088, 38089, 38090, 38888, 40000, 42000,
-                   44343, 44443, 45000, 48080, 48888, 50000, 50001, 50050,
-                   50051, 50100, 51000, 53000, 54000, 55553, 55554, 55555,
-                   56789, 58080, 58888, 59000, 60000, 61000, 62000, 63333,
-                   64738, 65000, 65530, 65531, 65532, 65533, 65534, 65535])
-    others.update([10000, 10001, 10002, 10003, 10004, 10005, 10006, 10007,
-                   10008, 10009, 10010, 10050, 10051, 10080, 10081, 10082,
-                   10083, 10084, 10085, 10086, 10250, 10255, 10256, 10554])
-
-    groups = [
-        (1080, 1090), (7890, 7899), (8000, 8010), (8080, 8090),
-        (8888, 8890), (9000, 9010), (9090, 9099), (10000, 10010),
-        (10080, 10086), (10808, 10820), (1194, 1199), (2052, 2096),
-        (3128, 3130), (51820, 51830), (8388, 8389), (8443, 8444),
-        (9050, 9051), (9150, 9151),
-    ]
-    for a, b in groups:
-        others.update(range(a, b + 1))
-
-    result = []
-    seen = set()
-    for p in priority:
-        if p not in seen:
-            seen.add(p)
-            result.append(p)
-    for p in sorted(others):
-        if p not in seen:
-            seen.add(p)
-            result.append(p)
-    return result
+def _build_probe_ports_12():
+    """12 个高优先级探针端口（放最前面）"""
+    return [22, 80, 443, 3389, 1080, 1081, 8080, 8081, 7890, 3128, 8000, 8443]
 
 
 def _build_proxy_ports():
-    """171 常见代理端口"""
+    """171 代理端口"""
     groups = [
         (1080, 1090), (10808, 10820), (7890, 7899), (8080, 8090),
         (8000, 8010), (8888, 8890), (9000, 9010), (9090, 9099),
@@ -119,8 +51,26 @@ def _build_proxy_ports():
     return sorted(s)
 
 
-COMMON_PORTS = _build_common_ports()
+def _build_common_ports():
+    """common 阶段端口：12 探针 + 171 代理（去重，12 探针排最前）"""
+    probe12 = _build_probe_ports_12()
+    proxy = _build_proxy_ports()
+    seen = set()
+    result = []
+    for p in probe12:
+        if p not in seen:
+            seen.add(p)
+            result.append(p)
+    for p in proxy:
+        if p not in seen:
+            seen.add(p)
+            result.append(p)
+    return result
+
+
+PROBE_PORTS_12 = _build_probe_ports_12()
 PROXY_PORTS = _build_proxy_ports()
+COMMON_PORTS = _build_common_ports()
 FULL_PORTS = list(range(1, 65536))
 
 parser = argparse.ArgumentParser()
@@ -414,11 +364,11 @@ def expand_ranges_to_ips(ranges):
 
 def get_phase_config(phase):
     if phase == 'common':
-        return COMMON_PORTS, None, OPEN_IPS_FILE, 'common', PROBE_BATCH_SIZE
+        return COMMON_PORTS, None, OPEN_IPS_FILE
     elif phase == 'proxy':
-        return PROXY_PORTS, OPEN_IPS_FILE, PROXY_MISSING_FILE, 'proxy', SCAN_BATCH_SIZE
+        return PROXY_PORTS, OPEN_IPS_FILE, PROXY_MISSING_FILE
     elif phase == 'full':
-        return FULL_PORTS, PROXY_MISSING_FILE, None, 'full', SCAN_BATCH_SIZE
+        return FULL_PORTS, PROXY_MISSING_FILE, None
     else:
         raise ValueError('未知阶段: %s' % phase)
 
@@ -459,7 +409,7 @@ def main():
         'full_completed': False,
     }
     current_phase = phase_state.get('current', 'common')
-    PORTS, upstream_file, output_filter_file, phase_name, batch_size = get_phase_config(current_phase)
+    PORTS, upstream_file, output_filter_file = get_phase_config(current_phase)
 
     ranges = slice_ranges(all_ranges, SHARD_INDEX, SHARD_TOTAL)
     ip_list = expand_ranges_to_ips(ranges)
@@ -523,9 +473,8 @@ def main():
     log('本片 IP 段数: %d' % len(ranges))
     log('本片 IP 总数: %d' % total_ips)
     log('端口数: %d' % len(PORTS))
-    log('每批端口: %d' % batch_size)
-    short_circuit_note = '开启（找到 1 个 open 立即跳）' if current_phase == 'common' else '关闭（必须扫完所有端口）'
-    log('短路: %s' % short_circuit_note)
+    if current_phase == 'common':
+        log('  前 12 探针: %s' % PROBE_PORTS_12)
     log('本次起点: IP #%d' % state['position'])
     log('已找到代理: %d' % len(existing))
     log('搜索连接超时: %d s | 验证超时: %d s' % (TCP_TIMEOUT, VERIFY_TIMEOUT))
@@ -565,7 +514,6 @@ def main():
 
     port_pool = ThreadPoolExecutor(max_workers=TCP_WORKERS * PORT_WORKERS)
     scan_fn = scan_port_common if current_phase == 'common' else scan_port_full
-    # ★ 只有 common 阶段短路
     short_circuit = (current_phase == 'common')
 
     def worker():
@@ -579,47 +527,39 @@ def main():
             ip_has_open = False
             ip_has_proxy = False
 
-            for batch_start in range(0, len(PORTS), batch_size):
+            futures = []
+            for port in PORTS:
+                key = '%s:%d' % (ip, port)
+                if key in existing:
+                    continue
+                futures.append((port, port_pool.submit(scan_fn, ip, port)))
+
+            for port, fut in futures:
                 if stop_flag[0]:
                     return
-                # ★ 只有 common 阶段 + short_circuit=True 时提前退出
+                try:
+                    is_open, r = fut.result()
+                except Exception:
+                    is_open, r = False, None
+                if is_open:
+                    ip_has_open = True
+                if r:
+                    ip_has_proxy = True
+                    with found_lock:
+                        existing.add('%s:%d' % (r[0], r[1]))
+                        found_count[0] += 1
+                        if note:
+                            line_out = '%s:%d@%s@%s' % (r[0], r[1], r[2], note)
+                        else:
+                            line_out = '%s:%d@%s' % (r[0], r[1], r[2])
+                        with open(OUTPUT_FILE, 'a', encoding='utf-8', newline='') as f:
+                            f.write(line_out + CRLF)
+                        log('[+] ' + line_out)
+                with found_lock:
+                    port_tasks[0] += 1
+                # 只有 common 阶段短路
                 if short_circuit and ip_has_open:
                     break
-
-                batch = PORTS[batch_start:batch_start + batch_size]
-                futures = []
-                for port in batch:
-                    key = '%s:%d' % (ip, port)
-                    if key in existing:
-                        continue
-                    futures.append((port, port_pool.submit(scan_fn, ip, port)))
-
-                for port, fut in futures:
-                    if stop_flag[0]:
-                        return
-                    try:
-                        is_open, r = fut.result()
-                    except Exception:
-                        is_open, r = False, None
-                    if is_open:
-                        ip_has_open = True
-                    if r:
-                        ip_has_proxy = True
-                        with found_lock:
-                            existing.add('%s:%d' % (r[0], r[1]))
-                            found_count[0] += 1
-                            if note:
-                                line_out = '%s:%d@%s@%s' % (r[0], r[1], r[2], note)
-                            else:
-                                line_out = '%s:%d@%s' % (r[0], r[1], r[2])
-                            with open(OUTPUT_FILE, 'a', encoding='utf-8', newline='') as f:
-                                f.write(line_out + CRLF)
-                            log('[+] ' + line_out)
-                    with found_lock:
-                        port_tasks[0] += 1
-                    # ★ 只有 common 阶段短路
-                    if short_circuit and ip_has_open:
-                        break
 
             if current_phase == 'common':
                 if ip_has_open:
@@ -693,7 +633,6 @@ def main():
             % (SHARD_INDEX, SHARD_TOTAL, current_phase,
                total_ips - state['position']))
 
-    # 先写产出，再 save state
     if current_phase == 'common' and open_ips:
         try:
             existing_open = load_ip_set(OPEN_IPS_FILE)
