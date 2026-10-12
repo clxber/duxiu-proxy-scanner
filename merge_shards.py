@@ -68,7 +68,7 @@ def main():
     log('阶段: %s' % current_phase)
     log('全部分片完成: %s' % all_done)
 
-    # 合并所有分片结果到 working_proxies.txt（无论是否全完成，都重建）
+    # 合并所有分片结果到 working_proxies.txt（重建）
     all_lines = []
     seen = set()
     for i in range(SHARD_TOTAL):
