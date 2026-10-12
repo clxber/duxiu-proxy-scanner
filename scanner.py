@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-高校代理扫描器 —— 分片 + 两阶段 + 断点续跑 + 存活 IP 预筛
+高校代理扫描器 —— 三阶段 + 分片 + 断点续跑
+阶段 1 common：12 探针端口，筛出存活 IP
+阶段 2 proxy ：171 常见代理端口，只扫存活 IP
+阶段 3 full  ：65535 全端口，只扫 proxy 阶段未找到代理的 IP
 验证方式：curl，3 种协议（http / socks5 / socks4）
 验证目标：http://myip.ipip.net
-成功判定：输出含 '当前 IP'
 并发：20 IP × 10 端口 = 200
 """
 
@@ -23,20 +25,37 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ============ 配置 ============
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-CONNECT_TIMEOUT = 1
-MAX_TIME = 3
+CONNECT_TIMEOUT = 5
+MAX_TIME = 15
 
 MAX_RUNTIME_SEC = int(os.environ.get('MAX_RUNTIME_SEC', 20880))
 
 
 def _build_common_ports():
+    """阶段 1：12 探针端口"""
     return [
         22, 80, 443, 3389, 1080, 1081, 8080, 8081,
         7890, 3128, 8000, 8443,
     ]
 
 
+def _build_proxy_ports():
+    """阶段 2：171 常见代理端口"""
+    groups = [
+        (1080, 1090), (10808, 10820), (7890, 7899), (8080, 8090),
+        (8000, 8010), (8888, 8890), (9000, 9010), (9090, 9099),
+        (10000, 10010), (10080, 10086), (3128, 3130), (8388, 8389),
+        (8443, 8444), (2052, 2096), (51820, 51830), (1194, 1199),
+        (9050, 9051), (9150, 9151),
+    ]
+    s = set()
+    for a, b in groups:
+        s.update(range(a, b + 1))
+    return sorted(s)
+
+
 COMMON_PORTS = _build_common_ports()
+PROXY_PORTS = _build_proxy_ports()
 FULL_PORTS = list(range(1, 65536))
 
 parser = argparse.ArgumentParser()
@@ -65,16 +84,17 @@ if SHARD_TOTAL > 1:
     STATE_FILE = 'progress_shard%d.json' % SHARD_INDEX
     OUTPUT_FILE = 'working_proxies_shard%d.txt' % SHARD_INDEX
     OPEN_IPS_FILE = 'open_ips_shard%d.txt' % SHARD_INDEX
+    PROXY_MISSING_FILE = 'proxy_missing_shard%d.txt' % SHARD_INDEX
 else:
     STATE_FILE = 'progress.json'
     OUTPUT_FILE = 'working_proxies.txt'
     OPEN_IPS_FILE = 'open_ips.txt'
+    PROXY_MISSING_FILE = 'proxy_missing.txt'
 
 CRLF = '\r\n'
 
 CURL = shutil.which('curl') or 'curl'
 
-# 3 种协议（不要 https）
 PROTOCOLS = ('http', 'socks5', 'socks4')
 
 
@@ -175,6 +195,22 @@ def load_existing_proxies(path):
     return s
 
 
+def load_ip_set(path):
+    """读一个 IP 列表文件为集合"""
+    s = set()
+    if not os.path.exists(path):
+        return s
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    s.add(line)
+    except Exception:
+        pass
+    return s
+
+
 def load_json(path):
     if not os.path.exists(path):
         return None
@@ -229,7 +265,6 @@ def tcp_check(ip, port, timeout=TCP_TIMEOUT):
 
 
 def _build_curl_args(ip, port, protocol):
-    """3 种协议的 curl 参数"""
     address = '%s:%d' % (ip, port)
     if protocol == 'http':
         return ['-x', address, 'http://myip.ipip.net']
@@ -241,22 +276,16 @@ def _build_curl_args(ip, port, protocol):
 
 
 def verify_proxy(ip, port, protocol):
-    """用 curl 通过代理访问 myip.ipip.net，成功输出含 '当前 IP'。"""
     args = _build_curl_args(ip, port, protocol)
     if args is None:
         return False
-
     verify_rate_wait()
-
     cmd = [
-        CURL,
-        '-sS',
-        '-4',
+        CURL, '-sS', '-4',
         '--connect-timeout', str(CONNECT_TIMEOUT),
         '--max-time', str(MAX_TIME),
         '-A', UA,
     ] + args
-
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=MAX_TIME + 3)
         output = proc.stdout.decode('utf-8', errors='ignore')
@@ -270,7 +299,6 @@ def verify_proxy(ip, port, protocol):
 
 
 def scan_ip_port(ip, port):
-    """对单个 IP:端口，3 种协议依次尝试，任一成功即返回。"""
     if not tcp_check(ip, port):
         return False, None
     for proto in PROTOCOLS:
@@ -312,6 +340,21 @@ def expand_ranges_to_ips(ranges):
     return flat
 
 
+# ============ 阶段配置 ============
+def get_phase_config(phase):
+    """
+    返回 (PORTS, 上游过滤文件, 本阶段产出文件, 阶段说明)
+    """
+    if phase == 'common':
+        return COMMON_PORTS, None, OPEN_IPS_FILE, '12 探针端口（筛存活 IP）'
+    elif phase == 'proxy':
+        return PROXY_PORTS, OPEN_IPS_FILE, PROXY_MISSING_FILE, '171 常见代理端口（只扫存活 IP）'
+    elif phase == 'full':
+        return FULL_PORTS, PROXY_MISSING_FILE, None, '65535 全端口（只扫 proxy 阶段未找到代理的 IP）'
+    else:
+        raise ValueError('未知阶段: %s' % phase)
+
+
 def main():
     if not os.path.exists(INPUT_FILE):
         log('未找到 %s' % INPUT_FILE)
@@ -325,32 +368,30 @@ def main():
     phase_state = load_json(PHASE_FILE) or {
         'current': 'common',
         'common_completed': False,
+        'proxy_completed': False,
         'full_completed': False,
     }
     current_phase = phase_state.get('current', 'common')
-    PORTS = COMMON_PORTS if current_phase == 'common' else FULL_PORTS
+    PORTS, upstream_file, output_filter_file, phase_desc = get_phase_config(current_phase)
 
     ranges = slice_ranges(all_ranges, SHARD_INDEX, SHARD_TOTAL)
     ip_list = expand_ranges_to_ips(ranges)
 
-    if current_phase == 'full':
-        if os.path.exists(OPEN_IPS_FILE):
-            wanted = set()
-            with open(OPEN_IPS_FILE, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        wanted.add(line)
+    # 上游过滤：只保留上游文件里列出的 IP（common 阶段无上游）
+    if upstream_file is not None:
+        if os.path.exists(upstream_file):
+            wanted = load_ip_set(upstream_file)
             if wanted:
                 before = len(ip_list)
                 ip_list = [(ip_int, note) for (ip_int, note) in ip_list
                            if ip_int_to_str(ip_int) in wanted]
-                log('[full] 存活 IP 预筛: %d → %d' % (before, len(ip_list)))
+                log('[%s] 上游过滤 (%s): %d → %d'
+                    % (current_phase, upstream_file, before, len(ip_list)))
             else:
-                log('[full] open_ips 文件为空，本片无存活 IP，直接标记完成')
+                log('[%s] 上游文件为空，本片无待扫 IP，直接标记完成' % current_phase)
                 state = {
                     'position': 0, 'done': 0, 'total_ips': 0, 'total_tasks': 0,
-                    'ports_count': len(FULL_PORTS), 'phase': 'full',
+                    'ports_count': len(PORTS), 'phase': current_phase,
                     'shard_index': SHARD_INDEX, 'shard_total': SHARD_TOTAL,
                     'started_at': time.strftime('%Y-%m-%d %H:%M:%S'),
                     'completed': True,
@@ -358,9 +399,13 @@ def main():
                     'session': 1,
                 }
                 save_json(STATE_FILE, state)
+                # 空产出文件也要写（下游能读到空文件直接跳过）
+                if output_filter_file:
+                    with open(output_filter_file, 'w', encoding='utf-8', newline='') as f:
+                        pass
                 return
         else:
-            log('[full] 无 open_ips 文件，扫描全部 IP（首次跑或老版本）')
+            log('[%s] 无上游文件 %s，扫描全部 IP' % (current_phase, upstream_file))
 
     total_ips = len(ip_list)
     total_tasks = total_ips * len(PORTS)
@@ -385,8 +430,8 @@ def main():
             'completed': False, 'session': 1,
         }
         with open(OUTPUT_FILE, 'w', encoding='utf-8', newline='') as f:
-            f.write('@ 代理扫描结果 [分片 %d/%d]' % (SHARD_INDEX, SHARD_TOTAL) + CRLF)
-            f.write('@ 阶段: %s' % current_phase + CRLF)
+            f.write('@ 代理扫描结果 [分片 %d/%d, 阶段 %s]'
+                    % (SHARD_INDEX, SHARD_TOTAL, current_phase) + CRLF)
             f.write('@ 开始时间: %s' % state['started_at'] + CRLF)
             f.write('@' + '-' * 58 + CRLF)
         existing = set()
@@ -401,6 +446,7 @@ def main():
             % (state['position'], total_ips,
                state['position'] * 100.0 / total_ips if total_ips else 0))
 
+    log('阶段说明: %s' % phase_desc)
     log('本片 IP 段数: %d' % len(ranges))
     log('本片 IP 总数: %d' % total_ips)
     log('端口数: %d' % len(PORTS))
@@ -416,7 +462,6 @@ def main():
     log('成功判定: 输出含"当前 IP"')
     log('curl 超时: 连接 %d s / 总 %d s' % (CONNECT_TIMEOUT, MAX_TIME))
     log('全局限速: %d 次/秒' % VERIFY_RATE_LIMIT if VERIFY_RATE_LIMIT > 0 else '不限速')
-    log('每 IP 冷却: %.1f s' % IP_COOLDOWN)
     log('最大运行时长: %d 秒 (%.2f 小时)'
         % (MAX_RUNTIME_SEC, MAX_RUNTIME_SEC / 3600.0))
     log('-' * 60)
@@ -429,8 +474,11 @@ def main():
     stop_flag = [False]
     t0 = time.time()
 
+    # 本阶段产出
     open_ips_lock = threading.Lock()
-    open_ips = set()
+    open_ips = set()            # common 阶段：存活 IP
+    proxy_found_ips = set()     # proxy 阶段：找到代理的 IP
+    proxy_missing_ips = set()   # proxy 阶段：没找到代理的 IP
 
     def next_position():
         with pos_lock:
@@ -457,6 +505,7 @@ def main():
                 pending.append((port, port_pool.submit(scan_ip_port, ip, port)))
 
             ip_has_open = False
+            ip_has_proxy = False
             for port, fut in pending:
                 if stop_flag[0]:
                     return
@@ -467,6 +516,7 @@ def main():
                 if is_open:
                     ip_has_open = True
                 if r:
+                    ip_has_proxy = True
                     with found_lock:
                         existing.add('%s:%d' % (r[0], r[1]))
                         found_count[0] += 1
@@ -486,14 +536,28 @@ def main():
                         pct = done_now * 100.0 / total_ips if total_ips else 0
                         with open_ips_lock:
                             open_count = len(open_ips)
-                        log('[进度] 本 session %d 任务 | 全局 %.2f%% | '
-                            '存活 %d | 代理 %d | %.2f task/s | %.0f s'
-                            % (scanned[0], pct, open_count, found_count[0],
-                               speed, elapsed))
+                            pf_count = len(proxy_found_ips)
+                            pm_count = len(proxy_missing_ips)
+                        extra = ''
+                        if current_phase == 'common':
+                            extra = '存活 %d' % open_count
+                        elif current_phase == 'proxy':
+                            extra = '找到 %d | 待深扫 %d' % (pf_count, pm_count)
+                        log('[进度] 本 session %d 任务 | 全局 %.2f%% | %s | 代理 %d | %.2f task/s | %.0f s'
+                            % (scanned[0], pct, extra, found_count[0], speed, elapsed))
 
-            if current_phase == 'common' and ip_has_open:
+            # 记录本阶段产出
+            if current_phase == 'common':
+                if ip_has_open:
+                    with open_ips_lock:
+                        open_ips.add(ip)
+            elif current_phase == 'proxy':
                 with open_ips_lock:
-                    open_ips.add(ip)
+                    if ip_has_proxy:
+                        proxy_found_ips.add(ip)
+                    elif ip_has_open:
+                        # 端口开放但没找到代理 → 需要深扫
+                        proxy_missing_ips.add(ip)
 
             if IP_COOLDOWN > 0:
                 time.sleep(IP_COOLDOWN)
@@ -528,34 +592,46 @@ def main():
         state['completed'] = True
         state['completed_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
         log('=' * 60)
-        log('[分片 %d/%d] 本阶段本片扫描完成！' % (SHARD_INDEX, SHARD_TOTAL))
+        log('[分片 %d/%d, 阶段 %s] 本阶段本片扫描完成！'
+            % (SHARD_INDEX, SHARD_TOTAL, current_phase))
     else:
         log('=' * 60)
-        log('[分片 %d/%d] 本次 session 结束，剩余 %d 个 IP'
-            % (SHARD_INDEX, SHARD_TOTAL, total_ips - state['position']))
+        log('[分片 %d/%d, 阶段 %s] 本次 session 结束，剩余 %d 个 IP'
+            % (SHARD_INDEX, SHARD_TOTAL, current_phase,
+               total_ips - state['position']))
 
     save_json(STATE_FILE, state)
 
+    # 写产出文件（跨 session 累积，追加模式）
     if current_phase == 'common' and state.get('completed'):
         try:
-            existing_open = set()
-            if os.path.exists(OPEN_IPS_FILE):
-                with open(OPEN_IPS_FILE, 'r', encoding='utf-8', errors='ignore') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line:
-                            existing_open.add(line)
+            existing_open = load_ip_set(OPEN_IPS_FILE)
             existing_open.update(open_ips)
             with open(OPEN_IPS_FILE, 'w', encoding='utf-8', newline='') as f:
                 for ip in sorted(existing_open):
                     f.write(ip + CRLF)
             log('=' * 60)
-            log('本 session 存活 IP: %d 个（任一探针端口 TCP 通的 IP）' % len(open_ips))
-            log('本 session 代理数: %d 个（验证通过）' % found_count[0])
-            log('存活 IP 列表已更新: %s (本 session %d 个, 累计 %d 个)'
+            log('本 session 存活 IP: %d 个' % len(open_ips))
+            log('存活 IP 列表已更新: %s (本 session %d, 累计 %d)'
                 % (OPEN_IPS_FILE, len(open_ips), len(existing_open)))
         except Exception as e:
             log('[!] 写存活 IP 文件失败: %s' % e)
+
+    elif current_phase == 'proxy' and state.get('completed'):
+        try:
+            # 累积已有的待深扫列表
+            existing_missing = load_ip_set(PROXY_MISSING_FILE)
+            existing_missing.update(proxy_missing_ips)
+            with open(PROXY_MISSING_FILE, 'w', encoding='utf-8', newline='') as f:
+                for ip in sorted(existing_missing):
+                    f.write(ip + CRLF)
+            log('=' * 60)
+            log('本 session 找到代理的 IP: %d 个' % len(proxy_found_ips))
+            log('本 session 待深扫 IP: %d 个' % len(proxy_missing_ips))
+            log('待深扫列表已更新: %s (本 session %d, 累计 %d)'
+                % (PROXY_MISSING_FILE, len(proxy_missing_ips), len(existing_missing)))
+        except Exception as e:
+            log('[!] 写待深扫文件失败: %s' % e)
 
     dt = time.time() - t0
     log('-' * 60)
