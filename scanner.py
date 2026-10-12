@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-高校代理扫描器 —— 四阶段 + 分片 + 断点续跑
-阶段 1 common    ：12 探针 + 171 代理（TCP 探活，发现 1 个 open 立即跳）
-阶段 2 revalidate：12 探针 + 171 代理（对 common 存活 IP 重新探活，剔除失效的）
-阶段 3 proxy     ：171 代理端口（完整扫描 + 验证，必须扫完）
-阶段 4 full      ：65535 全端口（只扫 proxy 未找到代理的 IP）
-验证方式：curl，3 种协议（http / socks5 / socks4）
+高校代理扫描器 —— 五阶段 + 分片 + 断点续跑
+阶段 1 verify_existing：验证已有代理（只有分片 0 干活）
+阶段 2 common         ：12 探针 + 171 代理（TCP 探活，短路）
+阶段 3 revalidate     ：12 探针 + 171 代理（重新探活，短路）
+阶段 4 proxy          ：171 代理端口（完整扫描 + 验证）
+阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
 验证目标：http://www.baidu.com/
 """
 
@@ -105,6 +105,7 @@ else:
     PROXY_MISSING_FILE = 'proxy_missing.txt'
 
 CRLF = '\r\n'
+EXISTING_PROXIES_FILE = 'working_proxies.txt'
 
 CURL = shutil.which('curl') or 'curl'
 
@@ -206,6 +207,35 @@ def load_existing_proxies(path):
     except Exception:
         pass
     return s
+
+
+def load_proxy_list(path):
+    """从 working_proxies.txt 读代理列表，返回 [(ip, port, proto, note), ...]"""
+    result = []
+    if not os.path.exists(path):
+        return result
+    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('@') or line.startswith('#'):
+                continue
+            parts = line.split('@')
+            if len(parts) < 2:
+                continue
+            addr = parts[0].strip()
+            proto = parts[1].strip().lower()
+            note = '@'.join(parts[2:]).strip() if len(parts) > 2 else ''
+            if ':' not in addr:
+                continue
+            ip, port_str = addr.rsplit(':', 1)
+            try:
+                port = int(port_str)
+            except ValueError:
+                continue
+            if proto not in PROTOCOLS:
+                continue
+            result.append((ip, port, proto, note))
+    return result
 
 
 def load_ip_set(path):
@@ -360,11 +390,9 @@ def expand_ranges_to_ips(ranges):
 
 
 def get_phase_config(phase):
-    """返回 (PORTS, upstream_file, output_filter_file)"""
     if phase == 'common':
         return COMMON_PORTS, None, OPEN_IPS_FILE
     elif phase == 'revalidate':
-        # revalidate 也用 12 + 171（对少量存活 IP 重扫，很快）
         return COMMON_PORTS, OPEN_IPS_FILE, OPEN_IPS_REVALIDATED_FILE
     elif phase == 'proxy':
         return PROXY_PORTS, OPEN_IPS_REVALIDATED_FILE, PROXY_MISSING_FILE
@@ -393,14 +421,99 @@ def _skip_this_shard(state_file, output_filter_file, phase, ports_count):
             pass
 
 
+# ============ verify_existing 阶段 ============
+
+def run_verify_existing_phase():
+    """verify_existing 阶段：分片 0 读 working_proxies.txt 逐个验证，其他分片跳过"""
+    if SHARD_INDEX != 0:
+        log('[verify_existing] 分片 %d 跳过（只有分片 0 做验证）' % SHARD_INDEX)
+        _skip_this_shard(STATE_FILE, None, 'verify_existing', 0)
+        return
+
+    proxy_list = load_proxy_list(EXISTING_PROXIES_FILE)
+    log('[verify_existing] 从 %s 读到 %d 个历史代理'
+        % (EXISTING_PROXIES_FILE, len(proxy_list)))
+
+    # 初始化输出文件
+    with open(OUTPUT_FILE, 'w', encoding='utf-8', newline='') as f:
+        f.write('@ 代理扫描结果 [verify_existing]' + CRLF)
+        f.write('@ 开始时间: %s' % time.strftime('%Y-%m-%d %H:%M:%S') + CRLF)
+        f.write('@' + '-' * 58 + CRLF)
+
+    if not proxy_list:
+        log('[verify_existing] 无历史代理可验证，跳过')
+        state = {
+            'position': 0, 'done': 0, 'total_ips': 0, 'total_tasks': 0,
+            'ports_count': 0, 'phase': 'verify_existing',
+            'shard_index': 0, 'shard_total': SHARD_TOTAL,
+            'started_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'completed': True,
+            'completed_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'session': 1,
+        }
+        save_json(STATE_FILE, state)
+        return
+
+    valid_count = [0]
+    checked_count = [0]
+    found_lock = threading.Lock()
+    t0 = time.time()
+
+    def verify_one(item):
+        ip, port, proto, note = item
+        ok = verify_proxy(ip, port, proto)
+        with found_lock:
+            checked_count[0] += 1
+            n = checked_count[0]
+            if ok:
+                valid_count[0] += 1
+                if note:
+                    line_out = '%s:%d@%s@%s' % (ip, port, proto, note)
+                else:
+                    line_out = '%s:%d@%s' % (ip, port, proto)
+                with open(OUTPUT_FILE, 'a', encoding='utf-8', newline='') as f:
+                    f.write(line_out + CRLF)
+                log('[+] 仍然有效: %s' % line_out)
+            if n % 20 == 0:
+                elapsed = time.time() - t0
+                log('[verify_existing] 已检查 %d/%d | 有效 %d | %.1f s'
+                    % (n, len(proxy_list), valid_count[0], elapsed))
+
+    port_pool = ThreadPoolExecutor(max_workers=TCP_WORKERS * PORT_WORKERS)
+    try:
+        futures = [port_pool.submit(verify_one, item) for item in proxy_list]
+        for fut in as_completed(futures):
+            try:
+                fut.result()
+            except Exception as ex:
+                log('[!] verify_one 异常: %s' % ex)
+    finally:
+        port_pool.shutdown(wait=False)
+
+    dt = time.time() - t0
+    log('=' * 60)
+    log('[verify_existing] 验证完成: %d/%d 仍然有效，耗时 %.1f 秒'
+        % (valid_count[0], len(proxy_list), dt))
+
+    state = {
+        'position': len(proxy_list),
+        'done': len(proxy_list),
+        'total_ips': len(proxy_list),
+        'phase': 'verify_existing',
+        'shard_index': 0, 'shard_total': SHARD_TOTAL,
+        'started_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'completed': True,
+        'completed_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'session': 1,
+    }
+    save_json(STATE_FILE, state)
+
+
+# ============ main ============
+
 def main():
     if not os.path.exists(INPUT_FILE):
         log('未找到 %s' % INPUT_FILE)
-        sys.exit(1)
-
-    all_ranges = load_ip_ranges(INPUT_FILE)
-    if not all_ranges:
-        log('未读取到有效 IP 范围')
         sys.exit(1)
 
     phase_state = load_json(PHASE_FILE) or {
@@ -411,17 +524,21 @@ def main():
         'full_completed': False,
     }
     current_phase = phase_state.get('current', 'common')
+
+    # ★ verify_existing 阶段特殊处理
+    if current_phase == 'verify_existing':
+        run_verify_existing_phase()
+        return
+
+    all_ranges = load_ip_ranges(INPUT_FILE)
+    if not all_ranges:
+        log('未读取到有效 IP 范围')
+        sys.exit(1)
+
     PORTS, upstream_file, output_filter_file = get_phase_config(current_phase)
 
     ranges = slice_ranges(all_ranges, SHARD_INDEX, SHARD_TOTAL)
     ip_list = expand_ranges_to_ips(ranges)
-
-    # 建 IP → note 映射（给 revalidate 阶段用）
-    ip_to_note = {}
-    for s, e, note in all_ranges:
-        if note:
-            # 只对活 IP 相关段记录
-            pass
 
     if upstream_file is not None:
         if os.path.exists(upstream_file):
@@ -432,7 +549,6 @@ def main():
                            if ip_int_to_str(ip_int) in wanted]
                 log('[%s] 上游过滤 (%s): %d → %d'
                     % (current_phase, upstream_file, before, len(ip_list)))
-                # revalidate 阶段从 ip_list 反查 note
                 if current_phase == 'revalidate':
                     ip_note_map = {}
                     for s, e, note in all_ranges:
