@@ -1,15 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 高校代理扫描器 —— 读秀IP认证验证 + 断点续跑
-安全优先：
-  - 5 并发 worker
-  - 无重试
-  - 读秀全局限速 1 次/秒
-  - 支持 QQWry 导出格式的 ip_list.txt（含归属地）
-  - working_proxies.txt 使用 \r\n 换行（Win7 记事本友好）
-  - 输出格式：ip:port@protocol@归属地
-  - 被 5.8h 截断 → 自动续跑；一轮跑完 → 停，等手动触发
-  - 只在"跑满"或"跑完"时提交，中间不 commit
+- 20 个 IP 并发 × 每 IP 内 20 个端口并发（全局 400 连接）
+- 单 IP 约 2 秒扫完
+- 被 5.8h 截断 → 自动续跑；一轮跑完 → 停，等手动触发
 """
 
 import os
@@ -29,7 +23,7 @@ DUXIU_URL = 'http://www.duxiu.com/'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 DUXIU_KEYWORDS = ['读秀学术搜索', '超星', '读秀知识库']
 
-MAX_RUNTIME_SEC = int(os.environ.get('MAX_RUNTIME_SEC', 20880))   # 5.8h
+MAX_RUNTIME_SEC = int(os.environ.get('MAX_RUNTIME_SEC', 20880))
 
 
 def _build_ports():
@@ -61,12 +55,13 @@ def _build_ports():
 
 PORTS = _build_ports()
 
-# ============ 安全优先的参数 ============
-TCP_TIMEOUT = 4
+# ============ 参数 ============
+TCP_TIMEOUT = 3
 VERIFY_TIMEOUT = 20
 VERIFY_RETRY = 0
 VERIFY_DELAY = 1.0
-TCP_WORKERS = 5
+TCP_WORKERS = 20          # 同时扫描的 IP 数量
+PORT_WORKERS = 20         # 每个 IP 内并发的端口数
 IP_COOLDOWN = 0.5
 VERIFY_RATE_LIMIT = 1
 
@@ -74,7 +69,6 @@ INPUT_FILE = 'ip_list.txt'
 OUTPUT_FILE = 'working_proxies.txt'
 STATE_FILE = 'progress.json'
 
-# 用来告诉 workflow 是否要自动续跑，写在 RUNNER_TEMP，不进仓库
 RUNNER_TEMP = os.environ.get('RUNNER_TEMP', '/tmp')
 FLAG_FILE = os.path.join(RUNNER_TEMP, 'continue.flag')
 
@@ -351,7 +345,8 @@ def main():
     log('任务总量: %d' % total_tasks)
     log('本次起点: IP #%d' % state['position'])
     log('已找到代理: %d' % len(existing))
-    log('并发 worker: %d' % TCP_WORKERS)
+    log('IP 并发: %d  ×  端口并发: %d  =  全局最大 %d 条连接'
+        % (TCP_WORKERS, PORT_WORKERS, TCP_WORKERS * PORT_WORKERS))
     log('TCP 超时: %d s | 验证超时: %d s | 验证重试: %d'
         % (TCP_TIMEOUT, VERIFY_TIMEOUT, VERIFY_RETRY))
     log('读秀限速: %d 次/秒' % VERIFY_RATE_LIMIT if VERIFY_RATE_LIMIT > 0 else '不限速')
@@ -376,6 +371,8 @@ def main():
             current_pos[0] += 1
             return p
 
+    port_pool = ThreadPoolExecutor(max_workers=TCP_WORKERS * PORT_WORKERS)
+
     def worker():
         while not stop_flag[0]:
             p = next_position()
@@ -383,16 +380,24 @@ def main():
                 return
             ip_int, note = ip_at_position(p)
             ip = ip_int_to_str(ip_int)
+
+            pending = []
             for port in PORTS:
-                if stop_flag[0]:
-                    return
                 key = '%s:%d' % (ip, port)
                 if key in existing:
                     continue
-                r = scan_ip_port(ip, port)
+                pending.append((port, port_pool.submit(scan_ip_port, ip, port)))
+
+            for port, fut in pending:
+                if stop_flag[0]:
+                    return
+                try:
+                    r = fut.result()
+                except Exception:
+                    r = None
                 if r:
                     with found_lock:
-                        existing.add(key)
+                        existing.add('%s:%d' % (r[0], r[1]))
                         found_count[0] += 1
                         if note:
                             line_out = '%s:%d@%s@%s' % (r[0], r[1], r[2], note)
@@ -424,33 +429,34 @@ def main():
 
     threading.Thread(target=watchdog, daemon=True).start()
 
-    with ThreadPoolExecutor(max_workers=TCP_WORKERS) as executor:
-        futures = [executor.submit(worker) for _ in range(TCP_WORKERS)]
-        for fut in as_completed(futures):
-            try:
-                fut.result()
-            except Exception as ex:
-                log('[!] worker 异常: %s' % ex)
-
-    stop_flag[0] = True
+    try:
+        with ThreadPoolExecutor(max_workers=TCP_WORKERS) as ip_pool:
+            futures = [ip_pool.submit(worker) for _ in range(TCP_WORKERS)]
+            for fut in as_completed(futures):
+                try:
+                    fut.result()
+                except Exception as ex:
+                    log('[!] worker 异常: %s' % ex)
+    finally:
+        stop_flag[0] = True
+        port_pool.shutdown(wait=False)
 
     with pos_lock:
         state['position'] = current_pos[0]
     state['done'] = state.get('done', 0) + scanned[0]
 
-    # ★ 判定：一轮是否真正跑完
     if state['position'] >= total_ips:
         state['completed'] = True
         state['completed_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
         log('=' * 60)
         log('一轮扫描完成！')
-        write_flag('done')       # 告诉 workflow：别自动续跑，等手动
+        write_flag('done')
     else:
         log('=' * 60)
         log('本次 session 结束，剩余 %d 个 IP 待扫'
             % (total_ips - state['position']))
         log('将自动无缝续跑（下一轮 workflow）')
-        write_flag('continue')   # 告诉 workflow：自动再触发一次
+        write_flag('continue')
 
     save_state(state)
 
