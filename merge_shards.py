@@ -1,11 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 合并 8 个分片结果，判断阶段推进 / 触发下一轮 / 清理
-三阶段：common → proxy → full
-
-关键修复：
-  - all_done=False（有分片被截断）时，也自动触发下一轮（无缝衔接）
-  - all_done=True 时才判断阶段推进 / 清理
+两阶段：common → full
 """
 
 import os
@@ -70,7 +66,6 @@ def cleanup_shard_files():
     patterns = [
         'progress_shard*.json',
         'open_ips_shard*.txt',
-        'proxy_missing_shard*.txt',
         'working_proxies_shard*.txt',
     ]
     removed = 0
@@ -88,12 +83,10 @@ def main():
     phase_state = load_json(PHASE_FILE) or {
         'current': 'common',
         'common_completed': False,
-        'proxy_completed': False,
         'full_completed': False,
     }
     current_phase = phase_state.get('current', 'common')
 
-    # 检查所有分片是否都完成
     all_done = True
     missing_shards = []
     for i in range(SHARD_TOTAL):
@@ -107,15 +100,11 @@ def main():
     if not all_done:
         log('未完成分片: %s' % missing_shards)
 
-    # 统计
     total_open = sum(count_file_lines('open_ips_shard%d.txt' % i)
                      for i in range(SHARD_TOTAL))
-    total_missing = sum(count_file_lines('proxy_missing_shard%d.txt' % i)
-                        for i in range(SHARD_TOTAL))
     log('存活 IP 总数: %d' % total_open)
-    log('待深扫 IP 总数: %d' % total_missing)
 
-    # 合并所有分片结果（无论 all_done 与否，都重建 working_proxies.txt）
+    # 合并所有分片结果
     all_lines = []
     seen = set()
     for i in range(SHARD_TOTAL):
@@ -141,39 +130,21 @@ def main():
     should_cleanup = False
 
     if not all_done:
-        # ★ Bug 2 修复：有分片被截断 → 自动触发下一轮续跑
         log('有分片未完成（被截断），自动触发下一轮续跑')
         trigger = 'yes'
     else:
-        # 全部分片完成，判断阶段推进
         if current_phase == 'common':
             if total_open == 0:
                 log('common 完成，0 存活 IP → 结束（IP 全死）')
                 phase_state['common_completed'] = True
-                phase_state['proxy_completed'] = True
                 phase_state['full_completed'] = True
                 save_json(PHASE_FILE, phase_state)
                 trigger = 'no'
                 should_cleanup = True
             else:
-                log('common 完成，%d 存活 IP → 切 proxy' % total_open)
-                phase_state['current'] = 'proxy'
-                phase_state['common_completed'] = True
-                save_json(PHASE_FILE, phase_state)
-                trigger = 'yes'
-
-        elif current_phase == 'proxy':
-            if total_missing == 0:
-                log('proxy 完成，所有存活 IP 都找到代理 → 结束')
-                phase_state['proxy_completed'] = True
-                phase_state['full_completed'] = True
-                save_json(PHASE_FILE, phase_state)
-                trigger = 'no'
-                should_cleanup = True
-            else:
-                log('proxy 完成，%d 个 IP 待深扫 → 切 full' % total_missing)
+                log('common 完成，%d 存活 IP → 切 full' % total_open)
                 phase_state['current'] = 'full'
-                phase_state['proxy_completed'] = True
+                phase_state['common_completed'] = True
                 save_json(PHASE_FILE, phase_state)
                 trigger = 'yes'
 
@@ -184,7 +155,6 @@ def main():
             trigger = 'no'
             should_cleanup = True
 
-    # 一轮完整结束后清理分片文件 + 重置 phase
     if should_cleanup:
         log('=' * 60)
         log('一轮完整结束，清理分片文件...')
@@ -192,7 +162,6 @@ def main():
         save_json(PHASE_FILE, {
             'current': 'common',
             'common_completed': False,
-            'proxy_completed': False,
             'full_completed': False,
         })
         log('phase.json 已重置为 common（下次手动触发为新一轮）')
