@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 高校代理扫描器 —— 分片 + 两阶段 + 断点续跑 + 存活 IP 预筛
-验证目标：百度（http://www.baidu.com/）
-common 阶段：12 探针端口，快速筛出存活 IP
-full 阶段：存活 IP 的全 65535 端口，找代理
+验证资源地址：http://www.baidu.com/
+验证资源参数：全球领先的中文搜索引擎
+并发：20 IP × 10 端口 = 200
 """
 
 import os
@@ -20,15 +20,18 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ============ 配置 ============
+# 验证资源地址
 VERIFY_URL = 'http://www.baidu.com/'
+# 验证资源参数
+VERIFY_KEYWORDS = ['全球领先的中文搜索引擎']
+
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-VERIFY_KEYWORDS = ['百度一下，你就知道']
 
 MAX_RUNTIME_SEC = int(os.environ.get('MAX_RUNTIME_SEC', 20880))
 
 
 def _build_common_ports():
-    """12 个探针端口：只用最常见的服务端口判断 IP 是否活着"""
+    """12 个探针端口"""
     return [
         22, 80, 443, 3389, 1080, 1081, 8080, 8081,
         7890, 3128, 8000, 8443,
@@ -46,12 +49,14 @@ args, _ = parser.parse_known_args()
 SHARD_INDEX = args.shard
 SHARD_TOTAL = args.shard_total
 
-TCP_TIMEOUT = 3
-VERIFY_TIMEOUT = 20
+# ============ 超时 / 并发 ============
+TCP_TIMEOUT = 3          # 搜索连接超时
+VERIFY_TIMEOUT = 30      # 验证超时
 VERIFY_RETRY = 0
 VERIFY_DELAY = 1.0
-TCP_WORKERS = 20
-PORT_WORKERS = 10
+TCP_WORKERS = 20         # 同时扫描的 IP 数
+PORT_WORKERS = 10        # 每 IP 内并发端口数
+# 全局最大连接 = 20 × 10 = 200
 IP_COOLDOWN = 0.5
 VERIFY_RATE_LIMIT = 1
 
@@ -222,7 +227,7 @@ def tcp_check(ip, port, timeout=TCP_TIMEOUT):
 
 
 def verify_proxy(ip, port, protocol):
-    """通过代理访问百度，返回 True 表示可用"""
+    """通过代理访问验证资源地址，检查页面是否含验证资源参数"""
     proxy_url = '%s://%s:%d' % (protocol, ip, port)
     proxies = {'http': proxy_url, 'https': proxy_url}
     if VERIFY_DELAY > 0:
@@ -383,11 +388,11 @@ def main():
     log('任务总量: %d' % total_tasks)
     log('本次起点: IP #%d' % state['position'])
     log('已找到代理: %d' % len(existing))
+    log('搜索连接超时: %d s | 验证超时: %d s' % (TCP_TIMEOUT, VERIFY_TIMEOUT))
     log('IP 并发: %d  ×  端口并发: %d  =  全局最大 %d 条连接'
         % (TCP_WORKERS, PORT_WORKERS, TCP_WORKERS * PORT_WORKERS))
-    log('TCP 超时: %d s | 验证超时: %d s | 验证重试: %d'
-        % (TCP_TIMEOUT, VERIFY_TIMEOUT, VERIFY_RETRY))
-    log('验证目标: %s | 关键词: %s' % (VERIFY_URL, VERIFY_KEYWORDS))
+    log('验证资源地址: %s' % VERIFY_URL)
+    log('验证资源参数: %s' % VERIFY_KEYWORDS)
     log('全局限速: %d 次/秒' % VERIFY_RATE_LIMIT if VERIFY_RATE_LIMIT > 0 else '不限速')
     log('每 IP 冷却: %.1f s' % IP_COOLDOWN)
     log('最大运行时长: %d 秒 (%.2f 小时)'
@@ -524,7 +529,7 @@ def main():
                     f.write(ip + CRLF)
             log('=' * 60)
             log('本 session 存活 IP: %d 个（任一探针端口 TCP 通的 IP）' % len(open_ips))
-            log('本 session 代理数: %d 个（百度验证通过）' % found_count[0])
+            log('本 session 代理数: %d 个（验证通过）' % found_count[0])
             log('存活 IP 列表已更新: %s (本 session %d 个, 累计 %d 个)'
                 % (OPEN_IPS_FILE, len(open_ips), len(existing_open)))
         except Exception as e:
