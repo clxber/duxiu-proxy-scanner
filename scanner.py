@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 高校代理扫描器 —— 分片 + 两阶段 + 断点续跑 + 存活 IP 预筛
+验证目标：百度（http://www.baidu.com/）
 common 阶段：12 探针端口，快速筛出存活 IP
 full 阶段：存活 IP 的全 65535 端口，找代理
-读秀验证：只用 '读秀学术搜索' 一个关键词
 """
 
 import os
@@ -20,9 +20,9 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ============ 配置 ============
-DUXIU_URL = 'http://www.duxiu.com/'
+VERIFY_URL = 'http://www.baidu.com/'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-DUXIU_KEYWORDS = ['读秀学术搜索']
+VERIFY_KEYWORDS = ['百度一下，你就知道']
 
 MAX_RUNTIME_SEC = int(os.environ.get('MAX_RUNTIME_SEC', 20880))
 
@@ -221,24 +221,25 @@ def tcp_check(ip, port, timeout=TCP_TIMEOUT):
             pass
 
 
-def verify_duxiu(ip, port, protocol):
+def verify_proxy(ip, port, protocol):
+    """通过代理访问百度，返回 True 表示可用"""
     proxy_url = '%s://%s:%d' % (protocol, ip, port)
     proxies = {'http': proxy_url, 'https': proxy_url}
     if VERIFY_DELAY > 0:
         time.sleep(VERIFY_DELAY)
     verify_rate_wait()
     try:
-        r = requests.get(DUXIU_URL, proxies=proxies, timeout=VERIFY_TIMEOUT,
+        r = requests.get(VERIFY_URL, proxies=proxies, timeout=VERIFY_TIMEOUT,
                          headers={'User-Agent': UA}, allow_redirects=True)
         if r.status_code != 200:
             return False
         try:
-            text = r.content.decode('gbk', errors='ignore')
+            text = r.content.decode('utf-8', errors='ignore')
         except Exception:
             text = r.text
-        if 'duxiu.com' not in r.url and 'duxiu.com' not in text:
+        if 'baidu.com' not in r.url and 'baidu.com' not in text:
             return False
-        if not any(kw in text for kw in DUXIU_KEYWORDS):
+        if not any(kw in text for kw in VERIFY_KEYWORDS):
             return False
         return True
     except Exception:
@@ -249,7 +250,7 @@ def scan_ip_port(ip, port):
     if not tcp_check(ip, port):
         return False, None
     for proto in ('http', 'socks5', 'socks4'):
-        if verify_duxiu(ip, port, proto):
+        if verify_proxy(ip, port, proto):
             return True, (ip, port, proto)
     return True, None
 
@@ -360,7 +361,7 @@ def main():
             'completed': False, 'session': 1,
         }
         with open(OUTPUT_FILE, 'w', encoding='utf-8', newline='') as f:
-            f.write('@ 读秀代理扫描结果 [分片 %d/%d]' % (SHARD_INDEX, SHARD_TOTAL) + CRLF)
+            f.write('@ 代理扫描结果 [分片 %d/%d]' % (SHARD_INDEX, SHARD_TOTAL) + CRLF)
             f.write('@ 阶段: %s' % current_phase + CRLF)
             f.write('@ 开始时间: %s' % state['started_at'] + CRLF)
             f.write('@' + '-' * 58 + CRLF)
@@ -386,7 +387,8 @@ def main():
         % (TCP_WORKERS, PORT_WORKERS, TCP_WORKERS * PORT_WORKERS))
     log('TCP 超时: %d s | 验证超时: %d s | 验证重试: %d'
         % (TCP_TIMEOUT, VERIFY_TIMEOUT, VERIFY_RETRY))
-    log('读秀限速: %d 次/秒' % VERIFY_RATE_LIMIT if VERIFY_RATE_LIMIT > 0 else '不限速')
+    log('验证目标: %s | 关键词: %s' % (VERIFY_URL, VERIFY_KEYWORDS))
+    log('全局限速: %d 次/秒' % VERIFY_RATE_LIMIT if VERIFY_RATE_LIMIT > 0 else '不限速')
     log('每 IP 冷却: %.1f s' % IP_COOLDOWN)
     log('最大运行时长: %d 秒 (%.2f 小时)'
         % (MAX_RUNTIME_SEC, MAX_RUNTIME_SEC / 3600.0))
@@ -522,7 +524,7 @@ def main():
                     f.write(ip + CRLF)
             log('=' * 60)
             log('本 session 存活 IP: %d 个（任一探针端口 TCP 通的 IP）' % len(open_ips))
-            log('本 session 代理数: %d 个（读秀验证通过）' % found_count[0])
+            log('本 session 代理数: %d 个（百度验证通过）' % found_count[0])
             log('存活 IP 列表已更新: %s (本 session %d 个, 累计 %d 个)'
                 % (OPEN_IPS_FILE, len(open_ips), len(existing_open)))
         except Exception as e:
