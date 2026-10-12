@@ -1,11 +1,11 @@
 {
-  "position": 155,
-  "done": 26060,
+  "position": 512,
+  "done": 87107,
   "total_ips": 512,
   "total_tasks": 87552,
   "ports_count": 171,
   "started_at": "2026-10-11 17:27:14",
-  "completed": false,
-  "completed_at": null,
-  "session": 1
+  "completed": true,
+  "completed_at": "2026-10-12 01:43:00",
+  "session": 2
 }
