@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 高校代理扫描器 —— 分片 + 两阶段 + 断点续跑 + 存活 IP 预筛
+common 阶段：12 探针端口，快速筛出存活 IP
+full 阶段：存活 IP 的全 65535 端口，找代理
 """
 
 import os
@@ -25,20 +27,21 @@ MAX_RUNTIME_SEC = int(os.environ.get('MAX_RUNTIME_SEC', 20880))
 
 
 def _build_common_ports():
-    groups = [
-        # === 探针端口（判断 IP 是否活着）===
-        (22, 22), (80, 80), (443, 443), (3389, 3389),
-        # === 代理常用端口 ===
-        (1080, 1090), (10808, 10820), (7890, 7899), (8080, 8090),
-        (8000, 8010), (8888, 8890), (9000, 9010), (9090, 9099),
-        (10000, 10010), (10080, 10086), (3128, 3130), (8388, 8389),
-        (8443, 8444), (2052, 2096), (51820, 51830), (1194, 1199),
-        (9050, 9051), (9150, 9151),
+    """12 个探针端口：只用最常见的服务端口判断 IP 是否活着"""
+    return [
+        22,     # SSH（服务器基本都开）
+        80,     # HTTP（校园网站）
+        443,    # HTTPS
+        3389,   # RDP
+        1080,   # SOCKS 代理
+        1081,
+        8080,   # HTTP 代理（最常见）
+        8081,
+        7890,   # Clash 默认
+        3128,   # Squid 代理
+        8000,   # 通用 HTTP
+        8443,   # 通用 HTTPS
     ]
-    s = set()
-    for a, b in groups:
-        s.update(range(a, b + 1))
-    return sorted(s)
 
 
 COMMON_PORTS = _build_common_ports()
@@ -461,7 +464,6 @@ def main():
                         speed = scanned[0] / elapsed if elapsed > 0 else 0
                         done_now = state['position'] + scanned[0] / len(PORTS)
                         pct = done_now * 100.0 / total_ips if total_ips else 0
-                        # ★ 加存活 IP 数
                         with open_ips_lock:
                             open_count = len(open_ips)
                         log('[进度] 本 session %d 任务 | 全局 %.2f%% | '
