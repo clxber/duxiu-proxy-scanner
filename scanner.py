@@ -2,9 +2,9 @@
 """
 高校代理扫描器 —— 五阶段 + 分片 + 断点续跑
 阶段 1 verify_existing：验证已有代理（只有分片 0 干活）
-阶段 2 common         ：12 探针 + 171 代理（TCP 探活，短路）
-阶段 3 revalidate     ：12 探针 + 171 代理（重新探活，短路）
-阶段 4 proxy          ：171 代理端口（完整扫描 + 双验证，所有协议都试）
+阶段 2 common         ：12 探针 + 171 代理（TCP 探活，IP 级短路）
+阶段 3 revalidate     ：12 探针 + 171 代理（重新探活，IP 级短路）
+阶段 4 proxy          ：171 代理端口（完整扫描 + 双验证，3 协议全试）
 阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
 双验证：curl 通过代理访问 百度 + 读秀，两个都通过才算有效代理
 """
@@ -670,6 +670,9 @@ def main():
             % (state['position'], total_ips,
                state['position'] * 100.0 / total_ips if total_ips else 0))
 
+    # ★ 记录起点（用于日志显示总进度）
+    start_position = state['position']
+
     log('本片 IP 段数: %d' % len(ranges))
     log('本片 IP 总数: %d' % total_ips)
     log('端口数: %d' % len(PORTS))
@@ -736,7 +739,6 @@ def main():
 
             futures = []
             for port in PORTS:
-                # 检查是否 3 种协议都已记录
                 all_done = True
                 for proto in PROTOCOLS:
                     if '%s:%d:%s' % (ip, port, proto) not in existing:
@@ -797,7 +799,9 @@ def main():
                 if processed_ips[0] % 200 == 0:
                     elapsed = time.time() - t0
                     speed = port_tasks[0] / elapsed if elapsed > 0 else 0
-                    pct = processed_ips[0] * 100.0 / total_ips if total_ips else 0
+                    # ★ 修复：日志显示"起点 + 本次已处理"的真实进度
+                    real_done = start_position + processed_ips[0]
+                    pct = real_done * 100.0 / total_ips if total_ips else 0
                     with open_ips_lock:
                         oc = len(open_ips)
                         rc = len(revalidated_ips)
@@ -812,7 +816,7 @@ def main():
                     else:
                         extra = ''
                     log('[进度] 已处理 %d/%d IP | 全局 %.2f%% | %s | 代理 %d | %.1f task/s | %.0f s'
-                        % (processed_ips[0], total_ips, pct, extra,
+                        % (real_done, total_ips, pct, extra,
                            found_count[0], speed, elapsed))
 
             if IP_COOLDOWN > 0:
