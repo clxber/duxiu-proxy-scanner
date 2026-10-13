@@ -337,18 +337,17 @@ def _build_curl_args(ip, port, protocol, url):
 
 def _text_contains_any(raw, keywords, excludes):
     """
-    智能解码：UTF-8 / GBK 都试一遍。
+    单编码 UTF-8。
     返回 True 表示：匹配到关键词 且 未匹配到排除词。
     """
-    for enc in ('utf-8', 'gbk'):
-        try:
-            text = raw.decode(enc, errors='ignore')
-        except Exception:
-            continue
-        if any(ex in text for ex in excludes):
-            continue
-        if any(kw in text for kw in keywords):
-            return True
+    try:
+        text = raw.decode('utf-8', errors='ignore')
+    except Exception:
+        return False
+    if any(ex in text for ex in excludes):
+        return False
+    if any(kw in text for kw in keywords):
+        return True
     return False
 
 
