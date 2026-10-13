@@ -7,6 +7,7 @@
 阶段 4 proxy          ：171 代理端口（完整扫描 + 双验证，3 协议全试）
 阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
 双验证：curl 通过代理访问 百度 + 读秀，两个都通过才算有效代理
+禁止时段：北京时间 0:00-8:00 自动停止（效率低）
 """
 
 import os
@@ -21,12 +22,18 @@ import argparse
 import subprocess
 import ipaddress
 import threading
+from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ============ 配置 ============
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 CONNECT_TIMEOUT = 5
 MAX_TIME = 15
+
+# ★ 禁止时段（北京时间）
+BJ_TZ = timezone(timedelta(hours=8))
+BLOCK_HOUR_START = 0    # 0:00
+BLOCK_HOUR_END = 8      # 8:00
 
 VERIFY_TARGETS = [
     {
@@ -47,6 +54,12 @@ VERIFY_TARGETS = [
 ]
 
 MAX_RUNTIME_SEC = int(os.environ.get('MAX_RUNTIME_SEC', 20880))
+
+
+def is_blocked_time():
+    """北京时间 0:00 - 8:00 之间返回 True"""
+    now = datetime.now(BJ_TZ)
+    return BLOCK_HOUR_START <= now.hour < BLOCK_HOUR_END
 
 
 def _build_probe_ports_12():
@@ -205,7 +218,6 @@ def ip_int_to_str(ip_int):
 
 
 def load_existing_proxies(path):
-    """返回 set，key 是 'ip:port:proto'"""
     s = set()
     if not os.path.exists(path):
         return s
@@ -409,7 +421,6 @@ def scan_port_common(ip, port):
 
 
 def scan_port_full(ip, port):
-    """返回 (is_open, [(ip, port, proto), ...])，所有支持的协议"""
     if not tcp_check(ip, port):
         return False, []
     working = []
@@ -580,6 +591,23 @@ def main():
         log('未找到 %s' % INPUT_FILE)
         sys.exit(1)
 
+    # ★ 启动时检查禁止时段
+    if is_blocked_time():
+        now = datetime.now(BJ_TZ)
+        log('[!] 北京时间 %s，处于禁止时段（0:00-8:00），本次 session 直接退出'
+            % now.strftime('%Y-%m-%d %H:%M:%S'))
+        state = {
+            'position': 0, 'done': 0, 'total_ips': 0, 'total_tasks': 0,
+            'ports_count': 0, 'phase': 'blocked',
+            'shard_index': SHARD_INDEX, 'shard_total': SHARD_TOTAL,
+            'started_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'completed': True,
+            'completed_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'session': 1,
+        }
+        save_json(STATE_FILE, state)
+        sys.exit(0)
+
     phase_state = load_json(PHASE_FILE) or {
         'current': 'common',
         'common_completed': False,
@@ -670,7 +698,6 @@ def main():
             % (state['position'], total_ips,
                state['position'] * 100.0 / total_ips if total_ips else 0))
 
-    # ★ 记录起点（用于日志显示总进度）
     start_position = state['position']
 
     log('本片 IP 段数: %d' % len(ranges))
@@ -691,6 +718,7 @@ def main():
     log('验证协议: %s（不短路，全试）' % (', '.join(PROTOCOLS)))
     log('curl 超时: 连接 %d s / 总 %d s' % (CONNECT_TIMEOUT, MAX_TIME))
     log('全局限速: %d 次/秒' % VERIFY_RATE_LIMIT if VERIFY_RATE_LIMIT > 0 else '不限速')
+    log('禁止时段: 北京时间 %02d:00 - %02d:00' % (BLOCK_HOUR_START, BLOCK_HOUR_END))
     log('最大运行时长: %d 秒 (%.2f 小时)'
         % (MAX_RUNTIME_SEC, MAX_RUNTIME_SEC / 3600.0))
     log('-' * 60)
@@ -702,6 +730,7 @@ def main():
     processed_ips = [0]
     port_tasks = [0]
     stop_flag = [False]
+    stop_reason = ['']
     t0 = time.time()
 
     open_ips_lock = threading.Lock()
@@ -728,6 +757,11 @@ def main():
 
     def worker():
         while not stop_flag[0]:
+            if is_blocked_time():
+                if not stop_reason[0]:
+                    stop_reason[0] = 'blocked_time'
+                stop_flag[0] = True
+                return
             p = next_position()
             if p is None:
                 return
@@ -799,7 +833,6 @@ def main():
                 if processed_ips[0] % 200 == 0:
                     elapsed = time.time() - t0
                     speed = port_tasks[0] / elapsed if elapsed > 0 else 0
-                    # ★ 修复：日志显示"起点 + 本次已处理"的真实进度
                     real_done = start_position + processed_ips[0]
                     pct = real_done * 100.0 / total_ips if total_ips else 0
                     with open_ips_lock:
@@ -826,6 +859,14 @@ def main():
         while not stop_flag[0]:
             if time.time() - t0 > MAX_RUNTIME_SEC:
                 log('[!] 达到最大运行时长，优雅停止')
+                stop_reason[0] = 'max_runtime'
+                stop_flag[0] = True
+                return
+            if is_blocked_time():
+                now = datetime.now(BJ_TZ)
+                log('[!] 北京时间 %s，进入禁止时段（0:00-8:00），优雅停止'
+                    % now.strftime('%H:%M:%S'))
+                stop_reason[0] = 'blocked_time'
                 stop_flag[0] = True
                 return
             time.sleep(5)
@@ -855,10 +896,22 @@ def main():
         log('[分片 %d/%d, 阶段 %s] 本阶段本片扫描完成！'
             % (SHARD_INDEX, SHARD_TOTAL, current_phase))
     else:
-        log('=' * 60)
-        log('[分片 %d/%d, 阶段 %s] 本次 session 结束，剩余 %d 个 IP'
-            % (SHARD_INDEX, SHARD_TOTAL, current_phase,
-               total_ips - state['position']))
+        reason = stop_reason[0] or 'unknown'
+        if reason == 'blocked_time':
+            log('=' * 60)
+            log('[分片 %d/%d, 阶段 %s] 因禁止时段停止，位置 %d / %d'
+                % (SHARD_INDEX, SHARD_TOTAL, current_phase,
+                   state['position'], total_ips))
+        elif reason == 'max_runtime':
+            log('=' * 60)
+            log('[分片 %d/%d, 阶段 %s] 本次 session 结束（达到最大运行时长），剩余 %d 个 IP'
+                % (SHARD_INDEX, SHARD_TOTAL, current_phase,
+                   total_ips - state['position']))
+        else:
+            log('=' * 60)
+            log('[分片 %d/%d, 阶段 %s] 本次 session 结束，剩余 %d 个 IP'
+                % (SHARD_INDEX, SHARD_TOTAL, current_phase,
+                   total_ips - state['position']))
 
     if current_phase == 'common' and open_ips:
         try:
