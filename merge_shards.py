@@ -2,12 +2,7 @@
 """
 合并 8 个分片结果，判断阶段推进 / 触发下一轮 / 清理
 五阶段：verify_existing → common → revalidate → proxy → full
-
-关键逻辑：
-  - verify_existing：**替换** working_proxies.txt（只留仍有效的）
-  - 其他阶段：**累积**（旧 + 新，去重）
-  - proxy 找到 ≥1 个代理 → 跳过 full
-  - 一轮完整结束 → phase.json 重置为 verify_existing（若 working_proxies.txt 非空）或 common
+禁止时段：北京时间 0:00-8:00 不触发下一轮
 """
 
 import os
@@ -15,11 +10,21 @@ import sys
 import json
 import time
 import glob
+from datetime import datetime, timezone, timedelta
 
 SHARD_TOTAL = 8
 PHASE_FILE = 'phase.json'
 OUTPUT_FILE = 'working_proxies.txt'
 CRLF = '\r\n'
+
+BJ_TZ = timezone(timedelta(hours=8))
+BLOCK_HOUR_START = 0
+BLOCK_HOUR_END = 8
+
+
+def is_blocked_time():
+    now = datetime.now(BJ_TZ)
+    return BLOCK_HOUR_START <= now.hour < BLOCK_HOUR_END
 
 
 def log(msg):
@@ -58,7 +63,6 @@ def read_shard_results(idx):
 
 
 def read_file_lines(path):
-    """从任意文件读非注释行"""
     if not os.path.exists(path):
         return []
     lines = []
@@ -72,7 +76,6 @@ def read_file_lines(path):
 
 
 def proxy_key(line):
-    """'ip:port@proto@note' → 'ip:port@proto'"""
     if '@' not in line:
         return line
     parts = line.split('@')
@@ -105,7 +108,6 @@ def cleanup_shard_files():
 
 
 def write_output(lines):
-    """写 working_proxies.txt"""
     with open(OUTPUT_FILE, 'w', encoding='utf-8', newline='') as f:
         f.write('@ 代理扫描结果' + CRLF)
         f.write('@ 格式: ip:port@protocol@归属地' + CRLF)
@@ -123,7 +125,6 @@ def set_trigger(value):
 
 
 def handle_verify_existing(phase_state):
-    """verify_existing 阶段：分片 0 验证结果 → 替换 working_proxies.txt"""
     all_done = True
     missing_shards = []
     for i in range(SHARD_TOTAL):
@@ -140,7 +141,6 @@ def handle_verify_existing(phase_state):
     shard0_lines = read_shard_results(0)
     log('分片 0 验证结果: %d 个仍然有效' % len(shard0_lines))
 
-    # ★ 替换 working_proxies.txt
     write_output(shard0_lines)
     log('已替换 working_proxies.txt: %d 条' % len(shard0_lines))
 
@@ -152,7 +152,6 @@ def handle_verify_existing(phase_state):
     if len(shard0_lines) > 0:
         log('verify_existing 完成，%d 个代理仍有效 → 结束（保留列表，等手动触发）'
             % len(shard0_lines))
-        # 清理 + 重置为 verify_existing（下次用户触发还是先验证）
         cleanup_shard_files()
         save_json(PHASE_FILE, {
             'current': 'verify_existing',
@@ -165,7 +164,6 @@ def handle_verify_existing(phase_state):
         set_trigger('no')
     else:
         log('verify_existing 完成，0 个代理仍有效 → 清空并自动进 common')
-        # working_proxies.txt 已经被 write_output([]) 清空
         cleanup_shard_files()
         save_json(PHASE_FILE, {
             'current': 'common',
@@ -188,12 +186,13 @@ def main():
     }
     current_phase = phase_state.get('current', 'common')
 
-    # ★ verify_existing 阶段特殊处理
     if current_phase == 'verify_existing':
         handle_verify_existing(phase_state)
+        if is_blocked_time():
+            log('⚠️ 进入禁止时段（0:00-8:00），强制不触发下一轮')
+            set_trigger('no')
         return
 
-    # ============ 其他阶段的通用逻辑 ============
     all_done = True
     missing_shards = []
     for i in range(SHARD_TOTAL):
@@ -217,13 +216,11 @@ def main():
     log('重验存活 IP 总数: %d' % total_rev)
     log('待深扫 IP 总数: %d' % total_missing)
 
-    # 合并：读旧的 + 本轮新结果 → 去重
     old_lines = read_file_lines(OUTPUT_FILE)
     new_lines = []
     for i in range(SHARD_TOTAL):
         new_lines.extend(read_shard_results(i))
 
-    # 优先保留新的
     seen = set()
     merged = []
     for line in new_lines:
@@ -285,7 +282,6 @@ def main():
                 trigger = 'yes'
 
         elif current_phase == 'proxy':
-            # ★ 节约原则：找到 ≥1 个代理就结束
             if len(new_lines) > 0:
                 log('proxy 完成，本轮找到 %d 个代理 → 结束（节约原则，跳过 full）'
                     % len(new_lines))
@@ -309,17 +305,16 @@ def main():
             trigger = 'no'
             should_cleanup = True
 
-    # 一轮完整结束 → 清理 + 重置
     if should_cleanup:
         log('=' * 60)
         log('一轮完整结束，清理分片文件...')
         cleanup_shard_files()
 
-        # 根据 working_proxies.txt 是否有内容决定下一轮阶段
         current_count = count_file_lines(OUTPUT_FILE)
         if current_count > 0:
             next_phase = 'verify_existing'
-            log('working_proxies.txt 有 %d 个代理，下一轮先做 verify_existing' % current_count)
+            log('working_proxies.txt 有 %d 个代理，下一轮先做 verify_existing'
+                % current_count)
         else:
             next_phase = 'common'
             log('working_proxies.txt 为空，下一轮从头开始')
@@ -332,6 +327,12 @@ def main():
             'full_completed': False,
         })
         log('phase.json 已重置为 %s' % next_phase)
+
+    if is_blocked_time():
+        now = datetime.now(BJ_TZ)
+        log('⚠️ 北京时间 %s，处于禁止时段（0:00-8:00），强制不触发下一轮'
+            % now.strftime('%H:%M:%S'))
+        trigger = 'no'
 
     set_trigger(trigger)
     log('trigger = %s' % trigger)
