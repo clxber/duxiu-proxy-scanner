@@ -1,6 +1,6 @@
 {
-  "current": "common",
-  "common_completed": false,
+  "current": "revalidate",
+  "common_completed": true,
   "revalidate_completed": false,
   "proxy_completed": false,
   "full_completed": false
