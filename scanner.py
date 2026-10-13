@@ -4,9 +4,9 @@
 阶段 1 verify_existing：验证已有代理（只有分片 0 干活）
 阶段 2 common         ：12 探针 + 171 代理（TCP 探活，短路）
 阶段 3 revalidate     ：12 探针 + 171 代理（重新探活，短路）
-阶段 4 proxy          ：171 代理端口（完整扫描 + 验证）
+阶段 4 proxy          ：171 代理端口（完整扫描 + 双验证）
 阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
-验证目标：http://www.baidu.com/
+双验证：curl 通过代理访问 百度 + 读秀，两个都通过才算有效代理
 """
 
 import os
@@ -26,7 +26,22 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 CONNECT_TIMEOUT = 5
 MAX_TIME = 15
-VERIFY_URL = 'http://www.baidu.com/'
+
+# ★ 双验证目标：全部通过才算有效代理
+VERIFY_TARGETS = [
+    {
+        'name': 'baidu',
+        'url': 'http://www.baidu.com/',
+        'keywords': ['baidu.com', '百度'],
+        'encoding': 'utf-8',
+    },
+    {
+        'name': 'duxiu',
+        'url': 'http://www.duxiu.com/',
+        'keywords': ['读秀学术搜索'],
+        'encoding': 'gbk',
+    },
+]
 
 MAX_RUNTIME_SEC = int(os.environ.get('MAX_RUNTIME_SEC', 20880))
 
@@ -210,7 +225,6 @@ def load_existing_proxies(path):
 
 
 def load_proxy_list(path):
-    """从 working_proxies.txt 读代理列表，返回 [(ip, port, proto, note), ...]"""
     result = []
     if not os.path.exists(path):
         return result
@@ -306,19 +320,20 @@ def tcp_check(ip, port, timeout=TCP_TIMEOUT):
             pass
 
 
-def _build_curl_args(ip, port, protocol):
+def _build_curl_args(ip, port, protocol, url):
     address = '%s:%d' % (ip, port)
     if protocol == 'http':
-        return ['-x', address, VERIFY_URL]
+        return ['-x', address, url]
     if protocol == 'socks5':
-        return ['--socks5-hostname', address, VERIFY_URL]
+        return ['--socks5-hostname', address, url]
     if protocol == 'socks4':
-        return ['--socks4a', address, VERIFY_URL]
+        return ['--socks4a', address, url]
     return None
 
 
-def verify_proxy(ip, port, protocol):
-    args = _build_curl_args(ip, port, protocol)
+def _verify_one_target(ip, port, protocol, target):
+    """通过代理访问单个目标，返回 True 表示命中"""
+    args = _build_curl_args(ip, port, protocol, target['url'])
     if args is None:
         return False
     verify_rate_wait()
@@ -333,14 +348,27 @@ def verify_proxy(ip, port, protocol):
     ] + args
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=MAX_TIME + 3)
-        output = proc.stdout.decode('utf-8', errors='ignore')
-        if 'baidu.com' in output or '百度' in output:
-            return True
-        return False
+        raw = proc.stdout
+        try:
+            text = raw.decode(target['encoding'], errors='ignore')
+        except Exception:
+            text = raw.decode('utf-8', errors='ignore')
+        return any(kw in text for kw in target['keywords'])
     except subprocess.TimeoutExpired:
         return False
     except Exception:
         return False
+
+
+def verify_proxy(ip, port, protocol):
+    """
+    双验证：百度 + 读秀，全部通过才算有效代理。
+    任一失败立即返回 False。
+    """
+    for target in VERIFY_TARGETS:
+        if not _verify_one_target(ip, port, protocol, target):
+            return False
+    return True
 
 
 def scan_port_common(ip, port):
@@ -424,7 +452,6 @@ def _skip_this_shard(state_file, output_filter_file, phase, ports_count):
 # ============ verify_existing 阶段 ============
 
 def run_verify_existing_phase():
-    """verify_existing 阶段：分片 0 读 working_proxies.txt 逐个验证，其他分片跳过"""
     if SHARD_INDEX != 0:
         log('[verify_existing] 分片 %d 跳过（只有分片 0 做验证）' % SHARD_INDEX)
         _skip_this_shard(STATE_FILE, None, 'verify_existing', 0)
@@ -434,10 +461,10 @@ def run_verify_existing_phase():
     log('[verify_existing] 从 %s 读到 %d 个历史代理'
         % (EXISTING_PROXIES_FILE, len(proxy_list)))
 
-    # 初始化输出文件
     with open(OUTPUT_FILE, 'w', encoding='utf-8', newline='') as f:
         f.write('@ 代理扫描结果 [verify_existing]' + CRLF)
         f.write('@ 开始时间: %s' % time.strftime('%Y-%m-%d %H:%M:%S') + CRLF)
+        f.write('@ 验证: 百度 + 读秀（双验证）' + CRLF)
         f.write('@' + '-' * 58 + CRLF)
 
     if not proxy_list:
@@ -525,7 +552,6 @@ def main():
     }
     current_phase = phase_state.get('current', 'common')
 
-    # ★ verify_existing 阶段特殊处理
     if current_phase == 'verify_existing':
         run_verify_existing_phase()
         return
@@ -593,6 +619,7 @@ def main():
             f.write('@ 代理扫描结果 [分片 %d/%d, 阶段 %s]'
                     % (SHARD_INDEX, SHARD_TOTAL, current_phase) + CRLF)
             f.write('@ 开始时间: %s' % state['started_at'] + CRLF)
+            f.write('@ 验证: 百度 + 读秀（双验证）' + CRLF)
             f.write('@' + '-' * 58 + CRLF)
         existing = set()
         log('=== 新一轮扫描 [分片 %d/%d, phase=%s] ==='
@@ -617,9 +644,11 @@ def main():
     log('IP 并发: %d  ×  端口并发: %d  =  全局最大 %d 条连接'
         % (TCP_WORKERS, PORT_WORKERS, TCP_WORKERS * PORT_WORKERS))
     log('验证方式: curl (%s)' % CURL)
-    log('验证目标: %s' % VERIFY_URL)
+    for t in VERIFY_TARGETS:
+        log('  验证目标 [%s]: %s | 关键词: %s | 编码: %s'
+            % (t['name'], t['url'], t['keywords'], t['encoding']))
+    log('成功判定: 全部验证目标通过')
     log('验证协议: %s' % (', '.join(PROTOCOLS)))
-    log('成功判定: 输出含 baidu.com 或 百度')
     log('curl 超时: 连接 %d s / 总 %d s' % (CONNECT_TIMEOUT, MAX_TIME))
     log('全局限速: %d 次/秒' % VERIFY_RATE_LIMIT if VERIFY_RATE_LIMIT > 0 else '不限速')
     log('最大运行时长: %d 秒 (%.2f 小时)'
