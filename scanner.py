@@ -4,7 +4,7 @@
 阶段 1 verify_existing：验证已有代理（只有分片 0 干活）
 阶段 2 common         ：12 探针 + 171 代理（TCP 探活，短路）
 阶段 3 revalidate     ：12 探针 + 171 代理（重新探活，短路）
-阶段 4 proxy          ：171 代理端口（完整扫描 + 双验证）
+阶段 4 proxy          ：171 代理端口（完整扫描 + 双验证，所有协议都试）
 阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
 双验证：curl 通过代理访问 百度 + 读秀，两个都通过才算有效代理
 """
@@ -28,7 +28,6 @@ UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 CONNECT_TIMEOUT = 5
 MAX_TIME = 15
 
-# ★ 双验证目标：全部通过才算有效代理
 VERIFY_TARGETS = [
     {
         'name': 'baidu',
@@ -206,6 +205,7 @@ def ip_int_to_str(ip_int):
 
 
 def load_existing_proxies(path):
+    """返回 set，key 是 'ip:port:proto'"""
     s = set()
     if not os.path.exists(path):
         return s
@@ -216,9 +216,13 @@ def load_existing_proxies(path):
                 if not line or line.startswith('@') or line.startswith('#'):
                     continue
                 if '@' in line:
-                    s.add(line.split('@', 1)[0].strip())
+                    parts = line.split('@')
+                    if len(parts) >= 2:
+                        s.add('%s:%s' % (parts[0].strip(),
+                                         parts[1].strip().lower()))
                 elif '#' in line:
-                    s.add(line.split('#', 1)[0].strip())
+                    p = line.split('#', 1)[0].strip()
+                    s.add(p)
                 else:
                     parts = line.split()
                     if parts:
@@ -336,10 +340,6 @@ def _build_curl_args(ip, port, protocol, url):
 
 
 def _text_contains_any(raw, keywords, excludes):
-    """
-    单编码 UTF-8。
-    返回 True 表示：匹配到关键词 且 未匹配到排除词。
-    """
     try:
         text = raw.decode('utf-8', errors='ignore')
     except Exception:
@@ -352,7 +352,6 @@ def _text_contains_any(raw, keywords, excludes):
 
 
 def _verify_one_url(ip, port, protocol, url, keywords, excludes):
-    """通过代理访问单个 URL，返回 True 表示命中。用临时 cookie jar 保存会话。"""
     args = _build_curl_args(ip, port, protocol, url)
     if args is None:
         return False
@@ -391,7 +390,6 @@ def _verify_one_url(ip, port, protocol, url, keywords, excludes):
 
 
 def _verify_one_target(ip, port, protocol, target):
-    """验证一个目标（可能多个 URL），任一 URL 命中即算通过"""
     for url in target['urls']:
         if _verify_one_url(ip, port, protocol, url,
                            target['keywords'], target.get('exclude', [])):
@@ -400,10 +398,6 @@ def _verify_one_target(ip, port, protocol, target):
 
 
 def verify_proxy(ip, port, protocol):
-    """
-    双验证：百度 + 读秀，全部通过才算有效代理。
-    任一失败立即返回 False。
-    """
     for target in VERIFY_TARGETS:
         if not _verify_one_target(ip, port, protocol, target):
             return False
@@ -411,16 +405,18 @@ def verify_proxy(ip, port, protocol):
 
 
 def scan_port_common(ip, port):
-    return tcp_check(ip, port), None
+    return tcp_check(ip, port), []
 
 
 def scan_port_full(ip, port):
+    """返回 (is_open, [(ip, port, proto), ...])，所有支持的协议"""
     if not tcp_check(ip, port):
-        return False, None
+        return False, []
+    working = []
     for proto in PROTOCOLS:
         if verify_proxy(ip, port, proto):
-            return True, (ip, port, proto)
-    return True, None
+            working.append((ip, port, proto))
+    return True, working
 
 
 def slice_ranges(ranges, shard_index, shard_total):
@@ -689,7 +685,7 @@ def main():
         log('  验证目标 [%s]: %s | 关键词: %s | 排除: %s'
             % (t['name'], t['urls'], t['keywords'], t.get('exclude', [])))
     log('成功判定: 全部验证目标通过')
-    log('验证协议: %s' % (', '.join(PROTOCOLS)))
+    log('验证协议: %s（不短路，全试）' % (', '.join(PROTOCOLS)))
     log('curl 超时: 连接 %d s / 总 %d s' % (CONNECT_TIMEOUT, MAX_TIME))
     log('全局限速: %d 次/秒' % VERIFY_RATE_LIMIT if VERIFY_RATE_LIMIT > 0 else '不限速')
     log('最大运行时长: %d 秒 (%.2f 小时)'
@@ -740,8 +736,13 @@ def main():
 
             futures = []
             for port in PORTS:
-                key = '%s:%d' % (ip, port)
-                if key in existing:
+                # 检查是否 3 种协议都已记录
+                all_done = True
+                for proto in PROTOCOLS:
+                    if '%s:%d:%s' % (ip, port, proto) not in existing:
+                        all_done = False
+                        break
+                if all_done:
                     continue
                 futures.append((port, port_pool.submit(scan_fn, ip, port)))
 
@@ -749,23 +750,28 @@ def main():
                 if stop_flag[0]:
                     return
                 try:
-                    is_open, r = fut.result()
+                    is_open, r_list = fut.result()
                 except Exception:
-                    is_open, r = False, None
+                    is_open, r_list = False, []
                 if is_open:
                     ip_has_open = True
-                if r:
+                if r_list:
                     ip_has_proxy = True
-                    with found_lock:
-                        existing.add('%s:%d' % (r[0], r[1]))
-                        found_count[0] += 1
-                        if note:
-                            line_out = '%s:%d@%s@%s' % (r[0], r[1], r[2], note)
-                        else:
-                            line_out = '%s:%d@%s' % (r[0], r[1], r[2])
-                        with open(OUTPUT_FILE, 'a', encoding='utf-8', newline='') as f:
-                            f.write(line_out + CRLF)
-                        log('[+] ' + line_out)
+                    for item in r_list:
+                        ip_, port_, proto_ = item
+                        key = '%s:%d:%s' % (ip_, port_, proto_)
+                        with found_lock:
+                            if key in existing:
+                                continue
+                            existing.add(key)
+                            found_count[0] += 1
+                            if note:
+                                line_out = '%s:%d@%s@%s' % (ip_, port_, proto_, note)
+                            else:
+                                line_out = '%s:%d@%s' % (ip_, port_, proto_)
+                            with open(OUTPUT_FILE, 'a', encoding='utf-8', newline='') as f:
+                                f.write(line_out + CRLF)
+                            log('[+] ' + line_out)
                 with found_lock:
                     port_tasks[0] += 1
                 if short_circuit and ip_has_open:
