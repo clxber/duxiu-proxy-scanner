@@ -16,6 +16,7 @@ import json
 import time
 import socket
 import shutil
+import tempfile
 import argparse
 import subprocess
 import ipaddress
@@ -31,15 +32,18 @@ MAX_TIME = 15
 VERIFY_TARGETS = [
     {
         'name': 'baidu',
-        'url': 'http://www.baidu.com/',
+        'urls': ['http://www.baidu.com/'],
         'keywords': ['baidu.com', '百度'],
-        'encoding': 'utf-8',
+        'exclude': [],
     },
     {
         'name': 'duxiu',
-        'url': 'http://www.duxiu.com/',
-        'keywords': ['读秀学术搜索'],
-        'encoding': 'gbk',
+        'urls': [
+            'https://www.duxiu.com/',
+            'http://www.duxiu.com/',
+        ],
+        'keywords': ['读秀学术搜索', 'duxiu.com'],
+        'exclude': ['系统登录', '用户名', '密 码', '请完成安全验证'],
     },
 ]
 
@@ -331,33 +335,69 @@ def _build_curl_args(ip, port, protocol, url):
     return None
 
 
-def _verify_one_target(ip, port, protocol, target):
-    """通过代理访问单个目标，返回 True 表示命中"""
-    args = _build_curl_args(ip, port, protocol, target['url'])
+def _text_contains_any(raw, keywords, excludes):
+    """
+    智能解码：UTF-8 / GBK 都试一遍。
+    返回 True 表示：匹配到关键词 且 未匹配到排除词。
+    """
+    for enc in ('utf-8', 'gbk'):
+        try:
+            text = raw.decode(enc, errors='ignore')
+        except Exception:
+            continue
+        if any(ex in text for ex in excludes):
+            continue
+        if any(kw in text for kw in keywords):
+            return True
+    return False
+
+
+def _verify_one_url(ip, port, protocol, url, keywords, excludes):
+    """通过代理访问单个 URL，返回 True 表示命中。用临时 cookie jar 保存会话。"""
+    args = _build_curl_args(ip, port, protocol, url)
     if args is None:
         return False
     verify_rate_wait()
-    cmd = [
-        CURL,
-        '-sS',
-        '-L',
-        '-4',
-        '--connect-timeout', str(CONNECT_TIMEOUT),
-        '--max-time', str(MAX_TIME),
-        '-A', UA,
-    ] + args
+
+    cookie_fd, cookie_path = tempfile.mkstemp(prefix='curl_cookie_', suffix='.txt')
+    os.close(cookie_fd)
+
     try:
+        cmd = [
+            CURL,
+            '-sS',
+            '-L',
+            '--max-redirs', '5',
+            '-c', cookie_path,
+            '-b', cookie_path,
+            '-4',
+            '--connect-timeout', str(CONNECT_TIMEOUT),
+            '--max-time', str(MAX_TIME),
+            '-A', UA,
+            '-H', 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            '-H', 'Accept-Language: zh-CN,zh;q=0.9,en;q=0.8',
+        ] + args
         proc = subprocess.run(cmd, capture_output=True, timeout=MAX_TIME + 3)
-        raw = proc.stdout
-        try:
-            text = raw.decode(target['encoding'], errors='ignore')
-        except Exception:
-            text = raw.decode('utf-8', errors='ignore')
-        return any(kw in text for kw in target['keywords'])
+        return _text_contains_any(proc.stdout, keywords, excludes)
     except subprocess.TimeoutExpired:
         return False
     except Exception:
         return False
+    finally:
+        try:
+            if os.path.exists(cookie_path):
+                os.remove(cookie_path)
+        except Exception:
+            pass
+
+
+def _verify_one_target(ip, port, protocol, target):
+    """验证一个目标（可能多个 URL），任一 URL 命中即算通过"""
+    for url in target['urls']:
+        if _verify_one_url(ip, port, protocol, url,
+                           target['keywords'], target.get('exclude', [])):
+            return True
+    return False
 
 
 def verify_proxy(ip, port, protocol):
@@ -501,6 +541,8 @@ def run_verify_existing_phase():
                 with open(OUTPUT_FILE, 'a', encoding='utf-8', newline='') as f:
                     f.write(line_out + CRLF)
                 log('[+] 仍然有效: %s' % line_out)
+            else:
+                log('[-] 已失效: %s:%d@%s' % (ip, port, proto))
             if n % 20 == 0:
                 elapsed = time.time() - t0
                 log('[verify_existing] 已检查 %d/%d | 有效 %d | %.1f s'
@@ -645,8 +687,8 @@ def main():
         % (TCP_WORKERS, PORT_WORKERS, TCP_WORKERS * PORT_WORKERS))
     log('验证方式: curl (%s)' % CURL)
     for t in VERIFY_TARGETS:
-        log('  验证目标 [%s]: %s | 关键词: %s | 编码: %s'
-            % (t['name'], t['url'], t['keywords'], t['encoding']))
+        log('  验证目标 [%s]: %s | 关键词: %s | 排除: %s'
+            % (t['name'], t['urls'], t['keywords'], t.get('exclude', [])))
     log('成功判定: 全部验证目标通过')
     log('验证协议: %s' % (', '.join(PROTOCOLS)))
     log('curl 超时: 连接 %d s / 总 %d s' % (CONNECT_TIMEOUT, MAX_TIME))
