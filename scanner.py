@@ -40,7 +40,7 @@ VERIFY_TARGETS = [
         'name': 'baidu',
         'urls': ['http://www.baidu.com/'],
         'keywords': ['baidu.com', '百度'],
-        'exclude': [],
+        'exclude': ['There is no handle', 'clickhouse-client'],
     },
     {
         'name': 'duxiu',
@@ -49,7 +49,8 @@ VERIFY_TARGETS = [
             'http://www.duxiu.com/',
         ],
         'keywords': ['读秀学术搜索', 'duxiu.com'],
-        'exclude': ['系统登录', '用户名', '密 码', '请完成安全验证'],
+        'exclude': ['系统登录', '用户名', '密 码', '请完成安全验证',
+                    'There is no handle', 'clickhouse-client'],
     },
 ]
 
@@ -218,6 +219,7 @@ def ip_int_to_str(ip_int):
 
 
 def load_existing_proxies(path):
+    """返回 set，key 是 'ip:port:proto'"""
     s = set()
     if not os.path.exists(path):
         return s
@@ -421,6 +423,7 @@ def scan_port_common(ip, port):
 
 
 def scan_port_full(ip, port):
+    """返回 (is_open, [(ip, port, proto), ...])，所有支持的协议"""
     if not tcp_check(ip, port):
         return False, []
     working = []
