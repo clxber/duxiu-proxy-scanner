@@ -4,16 +4,10 @@
 阶段 1 verify_existing：验证已有代理（只有分片 0 干活）
 阶段 2 common         ：12 探针 + 171 代理（TCP 探活，IP 级短路）
 阶段 3 revalidate     ：12 探针 + 171 代理（重新探活，IP 级短路）
-阶段 4 proxy          ：171 代理端口（完整扫描 + 双验证，4 协议全试）
+阶段 4 proxy          ：171 代理端口（完整扫描 + 单验证，4 协议全试）
 阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
-双验证：curl 通过代理访问 百度 + 读秀，两个都通过才算有效代理
-  百度：连通性探针，快速筛掉不存活 IP
-  读秀：目标站点，http 首页强制跳 https（-L 隐含测 CONNECT）
-代理协议：http / https / socks5 / socks4
-配对验证：
-  http    → http 百度 + http 读秀
-  https   → https 读秀
-  socks5/socks4 → http 百度 + http 读秀
+验证：curl 通过代理访问 https://www.duxiu.com/，命中「读秀学术搜索」才算有效代理
+代理协议：http / https / socks5 / socks4（4 协议统一测读秀 https）
 """
 
 import os
@@ -37,25 +31,11 @@ MAX_TIME = 15
 
 VERIFY_TARGETS = [
     {
-        'name': 'baidu_http',
-        'urls': ['http://www.baidu.com/'],
-        'keywords': ['百度一下，你就知道'],
-        'exclude': [],
-        'protocols': ['http', 'socks5', 'socks4'],
-    },
-    {
-        'name': 'duxiu_http',
-        'urls': ['http://www.duxiu.com/'],
-        'keywords': ['读秀学术搜索'],
-        'exclude': ['系统登录', '用户名', '密 码', '请完成安全验证'],
-        'protocols': ['http', 'socks5', 'socks4'],
-    },
-    {
-        'name': 'duxiu_https',
+        'name': 'duxiu',
         'urls': ['https://www.duxiu.com/'],
         'keywords': ['读秀学术搜索'],
         'exclude': ['系统登录', '用户名', '密 码', '请完成安全验证'],
-        'protocols': ['https'],
+        'protocols': ['http', 'https', 'socks5', 'socks4'],
     },
 ]
 
@@ -414,11 +394,8 @@ def _verify_one_target(ip, port, protocol, target):
 
 def verify_proxy(ip, port, protocol):
     """
-    配对验证：只测该协议适用（protocols 字段含该协议）的目标。
-      - http    → baidu_http + duxiu_http
-      - https   → duxiu_https
-      - socks5/socks4 → baidu_http + duxiu_http
-    任一适用目标失败，立即返回 False。
+    单验证：curl 通过代理访问 https://www.duxiu.com/，命中「读秀学术搜索」即通过。
+    4 协议统一测这一个目标。
     """
     for target in VERIFY_TARGETS:
         if protocol not in target.get('protocols', []):
@@ -523,7 +500,7 @@ def run_verify_existing_phase():
     with open(OUTPUT_FILE, 'w', encoding='utf-8', newline='') as f:
         f.write('@ 代理扫描结果 [verify_existing]' + CRLF)
         f.write('@ 开始时间: %s' % time.strftime('%Y-%m-%d %H:%M:%S') + CRLF)
-        f.write('@ 验证: 百度 + 读秀（双验证，按协议配对）' + CRLF)
+        f.write('@ 验证: 读秀 https（单验证）' + CRLF)
         f.write('@' + '-' * 58 + CRLF)
 
     if not proxy_list:
@@ -680,7 +657,7 @@ def main():
             f.write('@ 代理扫描结果 [分片 %d/%d, 阶段 %s]'
                     % (SHARD_INDEX, SHARD_TOTAL, current_phase) + CRLF)
             f.write('@ 开始时间: %s' % state['started_at'] + CRLF)
-            f.write('@ 验证: 百度 + 读秀（双验证，按协议配对）' + CRLF)
+            f.write('@ 验证: 读秀 https（单验证）' + CRLF)
             f.write('@' + '-' * 58 + CRLF)
         existing = set()
         log('=== 新一轮扫描 [分片 %d/%d, phase=%s] ==='
@@ -694,7 +671,6 @@ def main():
             % (state['position'], total_ips,
                state['position'] * 100.0 / total_ips if total_ips else 0))
 
-    # ★ 记录起点（用于日志显示总进度）
     start_position = state['position']
 
     log('本片 IP 段数: %d' % len(ranges))
