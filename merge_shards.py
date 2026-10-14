@@ -6,7 +6,7 @@
 关键逻辑：
   - verify_existing：**替换** working_proxies.txt（只留仍有效的）
   - 其他阶段：**累积**（旧 + 新，去重）
-  - proxy 找到 ≥1 个代理 → 跳过 full
+  - proxy 找到 ≥5 条记录 → 跳过 full（同一 IP 不同协议各算 1 条）
   - 一轮完整结束 → phase.json 重置为 verify_existing（若 working_proxies.txt 非空）或 common
 """
 
@@ -275,8 +275,8 @@ def main():
                 trigger = 'yes'
 
         elif current_phase == 'proxy':
-            # ★ 节约原则：找到 ≥1 个代理就结束
-            if len(new_lines) > 0:
+            # ★ 节约原则：找到 ≥5 条记录就结束（同一 IP 不同协议各算 1 条）
+            if len(new_lines) >= 5:
                 log('proxy 完成，本轮找到 %d 个代理 → 结束（节约原则，跳过 full）'
                     % len(new_lines))
                 phase_state['proxy_completed'] = True
@@ -285,8 +285,8 @@ def main():
                 trigger = 'no'
                 should_cleanup = True
             else:
-                log('proxy 完成，0 代理 → 切 full（深扫剩余 %d 个 IP）'
-                    % total_missing)
+                log('proxy 完成，%d 条代理 < 5 → 切 full（深扫剩余 %d 个 IP）'
+                    % (len(new_lines), total_missing))
                 phase_state['current'] = 'full'
                 phase_state['proxy_completed'] = True
                 save_json(PHASE_FILE, phase_state)
