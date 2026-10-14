@@ -34,14 +34,18 @@ jobs:
       - name: 提交
         if: always()
         run: |
-          git add -A
+          git add working_proxies_shard0.txt progress_shard0.json \
+                  open_ips_shard0.txt open_ips_revalidated_shard0.txt \
+                  proxy_missing_shard0.txt 2>/dev/null || true
           git diff --staged --quiet || git commit -m "分片0 [skip ci]"
           success=false
-          for i in $(seq 1 3); do
+          for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
               success=true; break
             fi
-            WAIT=$((RANDOM % 21 + 10))
+            git rebase --abort 2>/dev/null || true
+            WAIT=$((RANDOM % 26 + 5))
+            echo "重试 $i/10，等待 ${WAIT}s"
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
@@ -68,14 +72,18 @@ jobs:
       - name: 提交
         if: always()
         run: |
-          git add -A
+          git add working_proxies_shard1.txt progress_shard1.json \
+                  open_ips_shard1.txt open_ips_revalidated_shard1.txt \
+                  proxy_missing_shard1.txt 2>/dev/null || true
           git diff --staged --quiet || git commit -m "分片1 [skip ci]"
           success=false
-          for i in $(seq 1 3); do
+          for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
               success=true; break
             fi
-            WAIT=$((RANDOM % 21 + 10))
+            git rebase --abort 2>/dev/null || true
+            WAIT=$((RANDOM % 26 + 5))
+            echo "重试 $i/10，等待 ${WAIT}s"
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
@@ -102,14 +110,18 @@ jobs:
       - name: 提交
         if: always()
         run: |
-          git add -A
+          git add working_proxies_shard2.txt progress_shard2.json \
+                  open_ips_shard2.txt open_ips_revalidated_shard2.txt \
+                  proxy_missing_shard2.txt 2>/dev/null || true
           git diff --staged --quiet || git commit -m "分片2 [skip ci]"
           success=false
-          for i in $(seq 1 3); do
+          for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
               success=true; break
             fi
-            WAIT=$((RANDOM % 21 + 10))
+            git rebase --abort 2>/dev/null || true
+            WAIT=$((RANDOM % 26 + 5))
+            echo "重试 $i/10，等待 ${WAIT}s"
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
@@ -136,14 +148,18 @@ jobs:
       - name: 提交
         if: always()
         run: |
-          git add -A
+          git add working_proxies_shard3.txt progress_shard3.json \
+                  open_ips_shard3.txt open_ips_revalidated_shard3.txt \
+                  proxy_missing_shard3.txt 2>/dev/null || true
           git diff --staged --quiet || git commit -m "分片3 [skip ci]"
           success=false
-          for i in $(seq 1 3); do
+          for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
               success=true; break
             fi
-            WAIT=$((RANDOM % 21 + 10))
+            git rebase --abort 2>/dev/null || true
+            WAIT=$((RANDOM % 26 + 5))
+            echo "重试 $i/10，等待 ${WAIT}s"
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
@@ -170,14 +186,18 @@ jobs:
       - name: 提交
         if: always()
         run: |
-          git add -A
+          git add working_proxies_shard4.txt progress_shard4.json \
+                  open_ips_shard4.txt open_ips_revalidated_shard4.txt \
+                  proxy_missing_shard4.txt 2>/dev/null || true
           git diff --staged --quiet || git commit -m "分片4 [skip ci]"
           success=false
-          for i in $(seq 1 3); do
+          for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
               success=true; break
             fi
-            WAIT=$((RANDOM % 21 + 10))
+            git rebase --abort 2>/dev/null || true
+            WAIT=$((RANDOM % 26 + 5))
+            echo "重试 $i/10，等待 ${WAIT}s"
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
@@ -204,14 +224,18 @@ jobs:
       - name: 提交
         if: always()
         run: |
-          git add -A
+          git add working_proxies_shard5.txt progress_shard5.json \
+                  open_ips_shard5.txt open_ips_revalidated_shard5.txt \
+                  proxy_missing_shard5.txt 2>/dev/null || true
           git diff --staged --quiet || git commit -m "分片5 [skip ci]"
           success=false
-          for i in $(seq 1 3); do
+          for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
               success=true; break
             fi
-            WAIT=$((RANDOM % 21 + 10))
+            git rebase --abort 2>/dev/null || true
+            WAIT=$((RANDOM % 26 + 5))
+            echo "重试 $i/10，等待 ${WAIT}s"
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
@@ -238,14 +262,18 @@ jobs:
       - name: 提交
         if: always()
         run: |
-          git add -A
+          git add working_proxies_shard6.txt progress_shard6.json \
+                  open_ips_shard6.txt open_ips_revalidated_shard6.txt \
+                  proxy_missing_shard6.txt 2>/dev/null || true
           git diff --staged --quiet || git commit -m "分片6 [skip ci]"
           success=false
-          for i in $(seq 1 3); do
+          for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
               success=true; break
             fi
-            WAIT=$((RANDOM % 21 + 10))
+            git rebase --abort 2>/dev/null || true
+            WAIT=$((RANDOM % 26 + 5))
+            echo "重试 $i/10，等待 ${WAIT}s"
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
@@ -272,14 +300,18 @@ jobs:
       - name: 提交
         if: always()
         run: |
-          git add -A
+          git add working_proxies_shard7.txt progress_shard7.json \
+                  open_ips_shard7.txt open_ips_revalidated_shard7.txt \
+                  proxy_missing_shard7.txt 2>/dev/null || true
           git diff --staged --quiet || git commit -m "分片7 [skip ci]"
           success=false
-          for i in $(seq 1 3); do
+          for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
               success=true; break
             fi
-            WAIT=$((RANDOM % 21 + 10))
+            git rebase --abort 2>/dev/null || true
+            WAIT=$((RANDOM % 26 + 5))
+            echo "重试 $i/10，等待 ${WAIT}s"
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
@@ -310,11 +342,13 @@ jobs:
           git add -A
           git diff --staged --quiet || git commit -m "合并 [skip ci]"
           success=false
-          for i in $(seq 1 3); do
+          for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
               success=true; break
             fi
-            WAIT=$((RANDOM % 21 + 10))
+            git rebase --abort 2>/dev/null || true
+            WAIT=$((RANDOM % 26 + 5))
+            echo "重试 $i/10，等待 ${WAIT}s"
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
