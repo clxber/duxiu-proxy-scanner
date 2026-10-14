@@ -7,6 +7,8 @@
 阶段 4 proxy          ：171 代理端口（完整扫描 + 双验证，4 协议全试）
 阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
 双验证：curl 通过代理访问 百度 + 读秀，两个都通过才算有效代理
+  百度：连通性探针，快速筛掉不存活 IP
+  读秀：目标站点，http 首页强制跳 https（-L 隐含测 CONNECT）
 代理协议：http / https / socks5 / socks4
 配对验证：
   http    → http 百度 + http 读秀
