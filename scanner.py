@@ -32,7 +32,7 @@ VERIFY_TARGETS = [
     {
         'name': 'baidu',
         'urls': ['http://www.baidu.com/'],
-        'keywords': ['baidu.com', '百度'],
+        'keywords': ['百度一下，你就知道'],
         'exclude': [],
     },
     {
@@ -41,7 +41,7 @@ VERIFY_TARGETS = [
             'https://www.duxiu.com/',
             'http://www.duxiu.com/',
         ],
-        'keywords': ['读秀学术搜索', 'duxiu.com'],
+        'keywords': ['读秀学术搜索'],
         'exclude': ['系统登录', '用户名', '密 码', '请完成安全验证'],
     },
 ]
