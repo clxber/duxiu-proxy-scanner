@@ -8,6 +8,7 @@
   - 其他阶段：**累积**（旧 + 新，去重）
   - proxy 找到 ≥5 条记录 → 跳过 full（同一 IP 不同协议各算 1 条）
   - 一轮完整结束 → phase.json 重置为 verify_existing（若 working_proxies.txt 非空）或 common
+  - 天然支持 4 协议：http / https / socks5 / socks4（proxy_key 提取 ip:port@proto）
 """
 
 import os
@@ -71,7 +72,7 @@ def read_file_lines(path):
 
 
 def proxy_key(line):
-    """key 是 ip:port@proto，支持同一 IP:端口多协议"""
+    """key 是 ip:port@proto，支持同一 IP:端口多协议（http/https/socks5/socks4）"""
     if '@' not in line:
         return line
     parts = line.split('@')
