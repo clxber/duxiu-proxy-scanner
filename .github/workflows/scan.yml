@@ -2,8 +2,6 @@ name: Scan Proxies
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * *'   # UTC 0:00 = 北京 8:00
 
 permissions:
   contents: write
@@ -14,53 +12,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  health-check:
-    runs-on: ubuntu-26.04
-    outputs:
-      should_run: ${{ steps.check.outputs.should_run }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-      - name: 检查是否需要运行
-        id: check
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "🟢 手动触发，放行"
-            echo "should_run=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # schedule 触发：检查是否有未完成的任务
-          if [ ! -f "phase.json" ]; then
-            echo "⏸️ 无 phase.json，跳过（没有进行中的任务）"
-            echo "should_run=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          has_pending=false
-          for f in progress_shard*.json; do
-            if [ -f "$f" ]; then
-              completed=$(python3 -c "import json; print(json.load(open('$f')).get('completed', False))" 2>/dev/null || echo "True")
-              echo "  $f: completed=$completed"
-              if [ "$completed" = "False" ]; then
-                has_pending=true
-                break
-              fi
-            fi
-          done
-
-          if [ "$has_pending" = "true" ]; then
-            echo "🟢 有待续跑任务，放行"
-            echo "should_run=true" >> $GITHUB_OUTPUT
-          else
-            echo "⏸️ 无待续跑任务，跳过"
-            echo "should_run=false" >> $GITHUB_OUTPUT
-          fi
-
   shard-0:
-    needs: health-check
-    if: needs.health-check.outputs.should_run == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 358
     steps:
@@ -95,8 +47,6 @@ jobs:
           [ "$success" = "true" ] || exit 1
 
   shard-1:
-    needs: health-check
-    if: needs.health-check.outputs.should_run == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 358
     steps:
@@ -131,8 +81,6 @@ jobs:
           [ "$success" = "true" ] || exit 1
 
   shard-2:
-    needs: health-check
-    if: needs.health-check.outputs.should_run == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 358
     steps:
@@ -167,8 +115,6 @@ jobs:
           [ "$success" = "true" ] || exit 1
 
   shard-3:
-    needs: health-check
-    if: needs.health-check.outputs.should_run == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 358
     steps:
@@ -203,8 +149,6 @@ jobs:
           [ "$success" = "true" ] || exit 1
 
   shard-4:
-    needs: health-check
-    if: needs.health-check.outputs.should_run == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 358
     steps:
@@ -239,8 +183,6 @@ jobs:
           [ "$success" = "true" ] || exit 1
 
   shard-5:
-    needs: health-check
-    if: needs.health-check.outputs.should_run == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 358
     steps:
@@ -275,8 +217,6 @@ jobs:
           [ "$success" = "true" ] || exit 1
 
   shard-6:
-    needs: health-check
-    if: needs.health-check.outputs.should_run == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 358
     steps:
@@ -311,8 +251,6 @@ jobs:
           [ "$success" = "true" ] || exit 1
 
   shard-7:
-    needs: health-check
-    if: needs.health-check.outputs.should_run == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 358
     steps:
@@ -347,8 +285,8 @@ jobs:
           [ "$success" = "true" ] || exit 1
 
   merge:
-    needs: [health-check, shard-0, shard-1, shard-2, shard-3, shard-4, shard-5, shard-6, shard-7]
-    if: always() && needs.health-check.outputs.should_run == 'true'
+    needs: [shard-0, shard-1, shard-2, shard-3, shard-4, shard-5, shard-6, shard-7]
+    if: always()
     runs-on: ubuntu-26.04
     permissions:
       contents: write
@@ -383,13 +321,6 @@ jobs:
       - name: 触发下一轮（仅当需要续跑时）
         if: always()
         run: |
-          # ★ 北京时间禁止时段检查（双保险）
-          BJ_HOUR=$(TZ='Asia/Shanghai' date +%H)
-          if [ "$BJ_HOUR" -ge 0 ] && [ "$BJ_HOUR" -lt 8 ]; then
-            echo "🛑 北京时间 ${BJ_HOUR} 点，处于禁止时段（0:00-8:00），跳过触发"
-            exit 0
-          fi
-
           FLAG="$RUNNER_TEMP/trigger.flag"
           if [ ! -f "$FLAG" ]; then
             echo "无 flag，跳过"
