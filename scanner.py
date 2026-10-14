@@ -688,7 +688,7 @@ def main():
         log('  验证目标 [%s]: %s | 适用协议: %s | 关键词: %s | 排除: %s'
             % (t['name'], t['urls'], t.get('protocols', ['?']),
                t['keywords'], t.get('exclude', [])))
-    log('成功判定: 全部适用目标通过（配对验证）')
+    log('成功判定: 命中读秀页面（单验证）')
     log('验证协议: %s（不短路，全试）' % (', '.join(PROTOCOLS)))
     log('curl 超时: 连接 %d s / 总 %d s' % (CONNECT_TIMEOUT, MAX_TIME))
     log('全局限速: %d 次/秒' % VERIFY_RATE_LIMIT if VERIFY_RATE_LIMIT > 0 else '不限速')
