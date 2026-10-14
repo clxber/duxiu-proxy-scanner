@@ -736,6 +736,8 @@ def main():
 
             ip_has_open = False
             ip_has_proxy = False
+            ip_open_count = 0
+            ip_proxy_count = 0
 
             futures = []
             for port in PORTS:
@@ -748,6 +750,9 @@ def main():
                     continue
                 futures.append((port, port_pool.submit(scan_fn, ip, port)))
 
+            total_ports_for_ip = len(futures)
+            processed_ports_for_ip = 0
+
             for port, fut in futures:
                 if stop_flag[0]:
                     return
@@ -757,6 +762,7 @@ def main():
                     is_open, r_list = False, []
                 if is_open:
                     ip_has_open = True
+                    ip_open_count += 1
                 if r_list:
                     ip_has_proxy = True
                     for item in r_list:
@@ -767,6 +773,7 @@ def main():
                                 continue
                             existing.add(key)
                             found_count[0] += 1
+                            ip_proxy_count += 1
                             if note:
                                 line_out = '%s:%d@%s@%s' % (ip_, port_, proto_, note)
                             else:
@@ -776,6 +783,14 @@ def main():
                             log('[+] ' + line_out)
                 with found_lock:
                     port_tasks[0] += 1
+                    processed_ports_for_ip += 1
+                    # full 阶段：每 5000 端口打印一次细粒度进度
+                    if current_phase == 'full' and processed_ports_for_ip % 5000 == 0:
+                        elapsed = time.time() - t0
+                        ppct = processed_ports_for_ip * 100.0 / total_ports_for_ip if total_ports_for_ip else 0
+                        log('[full] %s 端口 %d/%d (%.1f%%) | 开放 %d | 本片代理 %d | %.0f s'
+                            % (ip, processed_ports_for_ip, total_ports_for_ip,
+                               ppct, ip_open_count, found_count[0], elapsed))
                 if short_circuit and ip_has_open:
                     break
 
@@ -796,12 +811,19 @@ def main():
 
             with found_lock:
                 processed_ips[0] += 1
-                if processed_ips[0] % 200 == 0:
+                real_done = start_position + processed_ips[0]
+                pct = real_done * 100.0 / total_ips if total_ips else 0
+                if current_phase == 'full':
+                    # full 阶段：每个 IP 完成都打印汇总
                     elapsed = time.time() - t0
                     speed = port_tasks[0] / elapsed if elapsed > 0 else 0
-                    # ★ 修复：日志显示"起点 + 本次已处理"的真实进度
-                    real_done = start_position + processed_ips[0]
-                    pct = real_done * 100.0 / total_ips if total_ips else 0
+                    log('[full] IP #%d %s 扫完 | 本 IP: 端口开放 %d, 代理 %d | 全局 %d/%d (%.2f%%) | 累计代理 %d | %.1f task/s | %.0f s'
+                        % (real_done, ip, ip_open_count, ip_proxy_count,
+                           real_done, total_ips, pct,
+                           found_count[0], speed, elapsed))
+                elif processed_ips[0] % 200 == 0:
+                    elapsed = time.time() - t0
+                    speed = port_tasks[0] / elapsed if elapsed > 0 else 0
                     with open_ips_lock:
                         oc = len(open_ips)
                         rc = len(revalidated_ips)
