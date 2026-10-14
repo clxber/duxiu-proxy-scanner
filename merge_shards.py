@@ -2,7 +2,12 @@
 """
 合并 8 个分片结果，判断阶段推进 / 触发下一轮 / 清理
 五阶段：verify_existing → common → revalidate → proxy → full
-禁止时段：北京时间 0:00-8:00 不触发下一轮
+
+关键逻辑：
+  - verify_existing：**替换** working_proxies.txt（只留仍有效的）
+  - 其他阶段：**累积**（旧 + 新，去重）
+  - proxy 找到 ≥1 个代理 → 跳过 full
+  - 一轮完整结束 → phase.json 重置为 verify_existing（若 working_proxies.txt 非空）或 common
 """
 
 import os
@@ -10,21 +15,11 @@ import sys
 import json
 import time
 import glob
-from datetime import datetime, timezone, timedelta
 
 SHARD_TOTAL = 8
 PHASE_FILE = 'phase.json'
 OUTPUT_FILE = 'working_proxies.txt'
 CRLF = '\r\n'
-
-BJ_TZ = timezone(timedelta(hours=8))
-BLOCK_HOUR_START = 0
-BLOCK_HOUR_END = 8
-
-
-def is_blocked_time():
-    now = datetime.now(BJ_TZ)
-    return BLOCK_HOUR_START <= now.hour < BLOCK_HOUR_END
 
 
 def log(msg):
@@ -76,6 +71,7 @@ def read_file_lines(path):
 
 
 def proxy_key(line):
+    """key 是 ip:port@proto，支持同一 IP:端口多协议"""
     if '@' not in line:
         return line
     parts = line.split('@')
@@ -188,9 +184,6 @@ def main():
 
     if current_phase == 'verify_existing':
         handle_verify_existing(phase_state)
-        if is_blocked_time():
-            log('⚠️ 进入禁止时段（0:00-8:00），强制不触发下一轮')
-            set_trigger('no')
         return
 
     all_done = True
@@ -282,6 +275,7 @@ def main():
                 trigger = 'yes'
 
         elif current_phase == 'proxy':
+            # ★ 节约原则：找到 ≥1 个代理就结束
             if len(new_lines) > 0:
                 log('proxy 完成，本轮找到 %d 个代理 → 结束（节约原则，跳过 full）'
                     % len(new_lines))
@@ -327,12 +321,6 @@ def main():
             'full_completed': False,
         })
         log('phase.json 已重置为 %s' % next_phase)
-
-    if is_blocked_time():
-        now = datetime.now(BJ_TZ)
-        log('⚠️ 北京时间 %s，处于禁止时段（0:00-8:00），强制不触发下一轮'
-            % now.strftime('%H:%M:%S'))
-        trigger = 'no'
 
     set_trigger(trigger)
     log('trigger = %s' % trigger)
