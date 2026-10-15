@@ -31,6 +31,18 @@ jobs:
         env:
           MAX_RUNTIME_SEC: '20880'
         run: python scanner.py --shard 0 --shard-total 8
+      - name: 上传本分片 Artifact（第一优先级，先保住数据）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: shard-0-files
+          path: |
+            working_proxies_shard0.txt
+            progress_shard0.json
+            open_ips_shard0.txt
+            open_ips_revalidated_shard0.txt
+            proxy_missing_shard0.txt
+          if-no-files-found: ignore
       - name: 提交
         if: always()
         run: |
@@ -52,18 +64,6 @@ jobs:
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
-      - name: 上传本分片 Artifact（保险）
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: shard-0-files
-          path: |
-            working_proxies_shard0.txt
-            progress_shard0.json
-            open_ips_shard0.txt
-            open_ips_revalidated_shard0.txt
-            proxy_missing_shard0.txt
-          if-no-files-found: ignore
 
   shard-1:
     runs-on: ubuntu-26.04
@@ -84,6 +84,18 @@ jobs:
         env:
           MAX_RUNTIME_SEC: '20880'
         run: python scanner.py --shard 1 --shard-total 8
+      - name: 上传本分片 Artifact（第一优先级，先保住数据）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: shard-1-files
+          path: |
+            working_proxies_shard1.txt
+            progress_shard1.json
+            open_ips_shard1.txt
+            open_ips_revalidated_shard1.txt
+            proxy_missing_shard1.txt
+          if-no-files-found: ignore
       - name: 提交
         if: always()
         run: |
@@ -105,18 +117,6 @@ jobs:
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
-      - name: 上传本分片 Artifact（保险）
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: shard-1-files
-          path: |
-            working_proxies_shard1.txt
-            progress_shard1.json
-            open_ips_shard1.txt
-            open_ips_revalidated_shard1.txt
-            proxy_missing_shard1.txt
-          if-no-files-found: ignore
 
   shard-2:
     runs-on: ubuntu-26.04
@@ -137,6 +137,18 @@ jobs:
         env:
           MAX_RUNTIME_SEC: '20880'
         run: python scanner.py --shard 2 --shard-total 8
+      - name: 上传本分片 Artifact（第一优先级，先保住数据）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: shard-2-files
+          path: |
+            working_proxies_shard2.txt
+            progress_shard2.json
+            open_ips_shard2.txt
+            open_ips_revalidated_shard2.txt
+            proxy_missing_shard2.txt
+          if-no-files-found: ignore
       - name: 提交
         if: always()
         run: |
@@ -158,18 +170,6 @@ jobs:
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
-      - name: 上传本分片 Artifact（保险）
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: shard-2-files
-          path: |
-            working_proxies_shard2.txt
-            progress_shard2.json
-            open_ips_shard2.txt
-            open_ips_revalidated_shard2.txt
-            proxy_missing_shard2.txt
-          if-no-files-found: ignore
 
   shard-3:
     runs-on: ubuntu-26.04
@@ -190,6 +190,18 @@ jobs:
         env:
           MAX_RUNTIME_SEC: '20880'
         run: python scanner.py --shard 3 --shard-total 8
+      - name: 上传本分片 Artifact（第一优先级，先保住数据）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: shard-3-files
+          path: |
+            working_proxies_shard3.txt
+            progress_shard3.json
+            open_ips_shard3.txt
+            open_ips_revalidated_shard3.txt
+            proxy_missing_shard3.txt
+          if-no-files-found: ignore
       - name: 提交
         if: always()
         run: |
@@ -211,18 +223,6 @@ jobs:
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
-      - name: 上传本分片 Artifact（保险）
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: shard-3-files
-          path: |
-            working_proxies_shard3.txt
-            progress_shard3.json
-            open_ips_shard3.txt
-            open_ips_revalidated_shard3.txt
-            proxy_missing_shard3.txt
-          if-no-files-found: ignore
 
   shard-4:
     runs-on: ubuntu-26.04
@@ -243,6 +243,18 @@ jobs:
         env:
           MAX_RUNTIME_SEC: '20880'
         run: python scanner.py --shard 4 --shard-total 8
+      - name: 上传本分片 Artifact（第一优先级，先保住数据）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: shard-4-files
+          path: |
+            working_proxies_shard4.txt
+            progress_shard4.json
+            open_ips_shard4.txt
+            open_ips_revalidated_shard4.txt
+            proxy_missing_shard4.txt
+          if-no-files-found: ignore
       - name: 提交
         if: always()
         run: |
@@ -264,18 +276,6 @@ jobs:
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
-      - name: 上传本分片 Artifact（保险）
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: shard-4-files
-          path: |
-            working_proxies_shard4.txt
-            progress_shard4.json
-            open_ips_shard4.txt
-            open_ips_revalidated_shard4.txt
-            proxy_missing_shard4.txt
-          if-no-files-found: ignore
 
   shard-5:
     runs-on: ubuntu-26.04
@@ -296,6 +296,18 @@ jobs:
         env:
           MAX_RUNTIME_SEC: '20880'
         run: python scanner.py --shard 5 --shard-total 8
+      - name: 上传本分片 Artifact（第一优先级，先保住数据）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: shard-5-files
+          path: |
+            working_proxies_shard5.txt
+            progress_shard5.json
+            open_ips_shard5.txt
+            open_ips_revalidated_shard5.txt
+            proxy_missing_shard5.txt
+          if-no-files-found: ignore
       - name: 提交
         if: always()
         run: |
@@ -317,18 +329,6 @@ jobs:
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
-      - name: 上传本分片 Artifact（保险）
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: shard-5-files
-          path: |
-            working_proxies_shard5.txt
-            progress_shard5.json
-            open_ips_shard5.txt
-            open_ips_revalidated_shard5.txt
-            proxy_missing_shard5.txt
-          if-no-files-found: ignore
 
   shard-6:
     runs-on: ubuntu-26.04
@@ -349,6 +349,18 @@ jobs:
         env:
           MAX_RUNTIME_SEC: '20880'
         run: python scanner.py --shard 6 --shard-total 8
+      - name: 上传本分片 Artifact（第一优先级，先保住数据）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: shard-6-files
+          path: |
+            working_proxies_shard6.txt
+            progress_shard6.json
+            open_ips_shard6.txt
+            open_ips_revalidated_shard6.txt
+            proxy_missing_shard6.txt
+          if-no-files-found: ignore
       - name: 提交
         if: always()
         run: |
@@ -370,18 +382,6 @@ jobs:
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
-      - name: 上传本分片 Artifact（保险）
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: shard-6-files
-          path: |
-            working_proxies_shard6.txt
-            progress_shard6.json
-            open_ips_shard6.txt
-            open_ips_revalidated_shard6.txt
-            proxy_missing_shard6.txt
-          if-no-files-found: ignore
 
   shard-7:
     runs-on: ubuntu-26.04
@@ -402,6 +402,18 @@ jobs:
         env:
           MAX_RUNTIME_SEC: '20880'
         run: python scanner.py --shard 7 --shard-total 8
+      - name: 上传本分片 Artifact（第一优先级，先保住数据）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: shard-7-files
+          path: |
+            working_proxies_shard7.txt
+            progress_shard7.json
+            open_ips_shard7.txt
+            open_ips_revalidated_shard7.txt
+            proxy_missing_shard7.txt
+          if-no-files-found: ignore
       - name: 提交
         if: always()
         run: |
@@ -423,18 +435,6 @@ jobs:
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
-      - name: 上传本分片 Artifact（保险）
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: shard-7-files
-          path: |
-            working_proxies_shard7.txt
-            progress_shard7.json
-            open_ips_shard7.txt
-            open_ips_revalidated_shard7.txt
-            proxy_missing_shard7.txt
-          if-no-files-found: ignore
 
   merge:
     needs: [shard-0, shard-1, shard-2, shard-3, shard-4, shard-5, shard-6, shard-7]
@@ -454,12 +454,72 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git pull origin main --rebase
-      - name: 下载所有分片 Artifact（保险恢复）
+
+      - name: 下载 shard-0 artifact
         if: always()
+        continue-on-error: true
         uses: actions/download-artifact@v7
         with:
+          name: shard-0-files
           path: artifacts
           merge-multiple: true
+      - name: 下载 shard-1 artifact
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: shard-1-files
+          path: artifacts
+          merge-multiple: true
+      - name: 下载 shard-2 artifact
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: shard-2-files
+          path: artifacts
+          merge-multiple: true
+      - name: 下载 shard-3 artifact
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: shard-3-files
+          path: artifacts
+          merge-multiple: true
+      - name: 下载 shard-4 artifact
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: shard-4-files
+          path: artifacts
+          merge-multiple: true
+      - name: 下载 shard-5 artifact
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: shard-5-files
+          path: artifacts
+          merge-multiple: true
+      - name: 下载 shard-6 artifact
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: shard-6-files
+          path: artifacts
+          merge-multiple: true
+      - name: 下载 shard-7 artifact
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: shard-7-files
+          path: artifacts
+          merge-multiple: true
+
       - name: 从 Artifact 恢复缺失文件
         if: always()
         run: |
@@ -478,8 +538,10 @@ jobs:
           else
             echo "无 artifact 目录，跳过"
           fi
+
       - name: 合并结果
         run: python merge_shards.py
+
       - name: 提交
         if: always()
         run: |
@@ -497,6 +559,7 @@ jobs:
             sleep $WAIT
           done
           [ "$success" = "true" ] || exit 1
+
       - name: 触发下一轮（仅当需要续跑时）
         if: always()
         run: |
@@ -514,6 +577,7 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: 上传最终 Artifact
         if: always()
         uses: actions/upload-artifact@v7
