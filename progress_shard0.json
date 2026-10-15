@@ -1,12 +1,12 @@
 {
   "position": 2,
-  "done": 342,
+  "done": 131070,
   "total_ips": 2,
-  "phase": "proxy",
+  "phase": "full",
   "shard_index": 0,
   "shard_total": 8,
-  "started_at": "2026-10-15 20:19:15",
+  "started_at": "2026-10-15 20:35:20",
   "completed": true,
   "session": 1,
-  "completed_at": "2026-10-15 20:19:19"
+  "completed_at": "2026-10-15 20:38:36"
 }
