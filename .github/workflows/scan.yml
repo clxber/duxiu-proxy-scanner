@@ -38,6 +38,7 @@ jobs:
                   open_ips_shard0.txt open_ips_revalidated_shard0.txt \
                   proxy_missing_shard0.txt 2>/dev/null || true
           git diff --staged --quiet || git commit -m "分片0 [skip ci]"
+          git stash -u 2>/dev/null || true
           success=false
           for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
@@ -76,6 +77,7 @@ jobs:
                   open_ips_shard1.txt open_ips_revalidated_shard1.txt \
                   proxy_missing_shard1.txt 2>/dev/null || true
           git diff --staged --quiet || git commit -m "分片1 [skip ci]"
+          git stash -u 2>/dev/null || true
           success=false
           for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
@@ -114,6 +116,7 @@ jobs:
                   open_ips_shard2.txt open_ips_revalidated_shard2.txt \
                   proxy_missing_shard2.txt 2>/dev/null || true
           git diff --staged --quiet || git commit -m "分片2 [skip ci]"
+          git stash -u 2>/dev/null || true
           success=false
           for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
@@ -152,6 +155,7 @@ jobs:
                   open_ips_shard3.txt open_ips_revalidated_shard3.txt \
                   proxy_missing_shard3.txt 2>/dev/null || true
           git diff --staged --quiet || git commit -m "分片3 [skip ci]"
+          git stash -u 2>/dev/null || true
           success=false
           for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
@@ -190,6 +194,7 @@ jobs:
                   open_ips_shard4.txt open_ips_revalidated_shard4.txt \
                   proxy_missing_shard4.txt 2>/dev/null || true
           git diff --staged --quiet || git commit -m "分片4 [skip ci]"
+          git stash -u 2>/dev/null || true
           success=false
           for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
@@ -228,6 +233,7 @@ jobs:
                   open_ips_shard5.txt open_ips_revalidated_shard5.txt \
                   proxy_missing_shard5.txt 2>/dev/null || true
           git diff --staged --quiet || git commit -m "分片5 [skip ci]"
+          git stash -u 2>/dev/null || true
           success=false
           for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
@@ -266,6 +272,7 @@ jobs:
                   open_ips_shard6.txt open_ips_revalidated_shard6.txt \
                   proxy_missing_shard6.txt 2>/dev/null || true
           git diff --staged --quiet || git commit -m "分片6 [skip ci]"
+          git stash -u 2>/dev/null || true
           success=false
           for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
@@ -304,6 +311,7 @@ jobs:
                   open_ips_shard7.txt open_ips_revalidated_shard7.txt \
                   proxy_missing_shard7.txt 2>/dev/null || true
           git diff --staged --quiet || git commit -m "分片7 [skip ci]"
+          git stash -u 2>/dev/null || true
           success=false
           for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
@@ -341,6 +349,7 @@ jobs:
         run: |
           git add -A
           git diff --staged --quiet || git commit -m "合并 [skip ci]"
+          git stash -u 2>/dev/null || true
           success=false
           for i in $(seq 1 10); do
             if git pull origin main --rebase && git push; then
