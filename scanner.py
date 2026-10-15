@@ -838,9 +838,8 @@ def main():
                         extra = '找到 %d | 待深扫 %d' % (pf, pm)
                     else:
                         extra = ''
-                    log('[进度] 已处理 %d/%d IP | 全局 %.2f%% | %s | 代理 %d | %.1f task/s | %.0f s'
-                        % (real_done, total_ips, pct, extra,
-                           found_count[0], speed, elapsed))
+                    log('[进度] 已处理 %d/%d IP | 全局 %.2f%% | %s | %.1f task/s | %.0f s'
+                        % (real_done, total_ips, pct, extra, speed, elapsed))
 
             if IP_COOLDOWN > 0:
                 time.sleep(IP_COOLDOWN)
