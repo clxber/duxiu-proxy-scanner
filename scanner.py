@@ -117,6 +117,7 @@ else:
 
 CRLF = '\r\n'
 EXISTING_PROXIES_FILE = 'working_proxies.txt'
+ALIVE_IP_RANGES_FILE = 'alive_ip_ranges.txt'
 
 CURL = shutil.which('curl') or 'curl'
 
@@ -662,6 +663,15 @@ def main():
         existing = set()
         log('=== 新一轮扫描 [分片 %d/%d, phase=%s] ==='
             % (SHARD_INDEX, SHARD_TOTAL, current_phase))
+
+        # ★ 清空上一轮的 alive_ip_ranges.txt（仅分片 0 做）
+        if SHARD_INDEX == 0:
+            try:
+                if os.path.exists(ALIVE_IP_RANGES_FILE):
+                    os.remove(ALIVE_IP_RANGES_FILE)
+                    log('已清空上一轮的 %s' % ALIVE_IP_RANGES_FILE)
+            except Exception:
+                pass
     else:
         state['session'] = state.get('session', 1) + 1
         existing = load_existing_proxies(OUTPUT_FILE)
