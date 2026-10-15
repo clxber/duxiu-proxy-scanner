@@ -9,6 +9,7 @@
   - proxy 找到 ≥1 条记录 → 跳过 full（同一 IP 不同协议各算 1 条）
   - 一轮完整结束 → phase.json 重置为 verify_existing（若 working_proxies.txt 非空）或 common
   - 天然支持 4 协议：http / https / socks5 / socks4（proxy_key 提取 ip:port@proto）
+  - ★ 全空检测：分片文件全不存在 = 分片 job 全失败 → 不清理、不推进、trigger=yes
 """
 
 import os
@@ -185,6 +186,24 @@ def main():
 
     if current_phase == 'verify_existing':
         handle_verify_existing(phase_state)
+        return
+
+    # ★ 全空检测：分片文件一个都不存在 = 分片 job 全失败 → 不清理、不推进
+    has_any_shard_file = any(
+        os.path.exists('working_proxies_shard%d.txt' % i) or
+        os.path.exists('progress_shard%d.json' % i) or
+        os.path.exists('open_ips_shard%d.txt' % i) or
+        os.path.exists('open_ips_revalidated_shard%d.txt' % i) or
+        os.path.exists('proxy_missing_shard%d.txt' % i)
+        for i in range(SHARD_TOTAL)
+    )
+    if not has_any_shard_file:
+        log('=' * 60)
+        log('⚠️ 所有分片文件都不存在——分片 job 可能全部失败')
+        log('⚠️ 保留 phase.json 状态不动（current=%s）' % current_phase)
+        log('⚠️ 触发下一轮重跑')
+        log('=' * 60)
+        set_trigger('yes')
         return
 
     all_done = True
