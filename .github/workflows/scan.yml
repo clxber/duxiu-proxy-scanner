@@ -43,6 +43,7 @@ jobs:
             working_proxies_shard0.txt
             progress_shard0.json
             open_ips_shard0.txt
+            proxy_ips_shard0.txt
             open_ips_revalidated_shard0.txt
             proxy_missing_shard0.txt
           if-no-files-found: ignore
@@ -50,7 +51,8 @@ jobs:
         if: always()
         run: |
           for f in working_proxies_shard0.txt progress_shard0.json \
-                   open_ips_shard0.txt open_ips_revalidated_shard0.txt \
+                   open_ips_shard0.txt proxy_ips_shard0.txt \
+                   open_ips_revalidated_shard0.txt \
                    proxy_missing_shard0.txt; do
             if [ -f "$f" ]; then
               git add "$f"
@@ -101,6 +103,7 @@ jobs:
             working_proxies_shard1.txt
             progress_shard1.json
             open_ips_shard1.txt
+            proxy_ips_shard1.txt
             open_ips_revalidated_shard1.txt
             proxy_missing_shard1.txt
           if-no-files-found: ignore
@@ -108,7 +111,8 @@ jobs:
         if: always()
         run: |
           for f in working_proxies_shard1.txt progress_shard1.json \
-                   open_ips_shard1.txt open_ips_revalidated_shard1.txt \
+                   open_ips_shard1.txt proxy_ips_shard1.txt \
+                   open_ips_revalidated_shard1.txt \
                    proxy_missing_shard1.txt; do
             if [ -f "$f" ]; then
               git add "$f"
@@ -159,6 +163,7 @@ jobs:
             working_proxies_shard2.txt
             progress_shard2.json
             open_ips_shard2.txt
+            proxy_ips_shard2.txt
             open_ips_revalidated_shard2.txt
             proxy_missing_shard2.txt
           if-no-files-found: ignore
@@ -166,7 +171,8 @@ jobs:
         if: always()
         run: |
           for f in working_proxies_shard2.txt progress_shard2.json \
-                   open_ips_shard2.txt open_ips_revalidated_shard2.txt \
+                   open_ips_shard2.txt proxy_ips_shard2.txt \
+                   open_ips_revalidated_shard2.txt \
                    proxy_missing_shard2.txt; do
             if [ -f "$f" ]; then
               git add "$f"
@@ -217,6 +223,7 @@ jobs:
             working_proxies_shard3.txt
             progress_shard3.json
             open_ips_shard3.txt
+            proxy_ips_shard3.txt
             open_ips_revalidated_shard3.txt
             proxy_missing_shard3.txt
           if-no-files-found: ignore
@@ -224,7 +231,8 @@ jobs:
         if: always()
         run: |
           for f in working_proxies_shard3.txt progress_shard3.json \
-                   open_ips_shard3.txt open_ips_revalidated_shard3.txt \
+                   open_ips_shard3.txt proxy_ips_shard3.txt \
+                   open_ips_revalidated_shard3.txt \
                    proxy_missing_shard3.txt; do
             if [ -f "$f" ]; then
               git add "$f"
@@ -275,6 +283,7 @@ jobs:
             working_proxies_shard4.txt
             progress_shard4.json
             open_ips_shard4.txt
+            proxy_ips_shard4.txt
             open_ips_revalidated_shard4.txt
             proxy_missing_shard4.txt
           if-no-files-found: ignore
@@ -282,7 +291,8 @@ jobs:
         if: always()
         run: |
           for f in working_proxies_shard4.txt progress_shard4.json \
-                   open_ips_shard4.txt open_ips_revalidated_shard4.txt \
+                   open_ips_shard4.txt proxy_ips_shard4.txt \
+                   open_ips_revalidated_shard4.txt \
                    proxy_missing_shard4.txt; do
             if [ -f "$f" ]; then
               git add "$f"
@@ -333,6 +343,7 @@ jobs:
             working_proxies_shard5.txt
             progress_shard5.json
             open_ips_shard5.txt
+            proxy_ips_shard5.txt
             open_ips_revalidated_shard5.txt
             proxy_missing_shard5.txt
           if-no-files-found: ignore
@@ -340,7 +351,8 @@ jobs:
         if: always()
         run: |
           for f in working_proxies_shard5.txt progress_shard5.json \
-                   open_ips_shard5.txt open_ips_revalidated_shard5.txt \
+                   open_ips_shard5.txt proxy_ips_shard5.txt \
+                   open_ips_revalidated_shard5.txt \
                    proxy_missing_shard5.txt; do
             if [ -f "$f" ]; then
               git add "$f"
@@ -391,6 +403,7 @@ jobs:
             working_proxies_shard6.txt
             progress_shard6.json
             open_ips_shard6.txt
+            proxy_ips_shard6.txt
             open_ips_revalidated_shard6.txt
             proxy_missing_shard6.txt
           if-no-files-found: ignore
@@ -398,7 +411,8 @@ jobs:
         if: always()
         run: |
           for f in working_proxies_shard6.txt progress_shard6.json \
-                   open_ips_shard6.txt open_ips_revalidated_shard6.txt \
+                   open_ips_shard6.txt proxy_ips_shard6.txt \
+                   open_ips_revalidated_shard6.txt \
                    proxy_missing_shard6.txt; do
             if [ -f "$f" ]; then
               git add "$f"
@@ -449,6 +463,7 @@ jobs:
             working_proxies_shard7.txt
             progress_shard7.json
             open_ips_shard7.txt
+            proxy_ips_shard7.txt
             open_ips_revalidated_shard7.txt
             proxy_missing_shard7.txt
           if-no-files-found: ignore
@@ -456,7 +471,8 @@ jobs:
         if: always()
         run: |
           for f in working_proxies_shard7.txt progress_shard7.json \
-                   open_ips_shard7.txt open_ips_revalidated_shard7.txt \
+                   open_ips_shard7.txt proxy_ips_shard7.txt \
+                   open_ips_revalidated_shard7.txt \
                    proxy_missing_shard7.txt; do
             if [ -f "$f" ]; then
               git add "$f"
