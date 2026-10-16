@@ -1,12 +1,14 @@
 {
-  "position": 58241,
-  "done": 10185362,
-  "total_ips": 58241,
-  "phase": "common",
+  "position": 0,
+  "done": 0,
+  "total_ips": 0,
+  "total_tasks": 0,
+  "ports_count": 175,
+  "phase": "revalidate",
   "shard_index": 4,
   "shard_total": 8,
-  "started_at": "2026-10-16 07:45:18",
+  "started_at": "2026-10-16 16:13:07",
   "completed": true,
-  "session": 2,
-  "completed_at": "2026-10-16 16:07:56"
+  "completed_at": "2026-10-16 16:13:07",
+  "session": 1
 }
