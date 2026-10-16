@@ -1,646 +1,995 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<title>IP 段扫描时间估算器</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
-    background: #f5f7fa;
-    color: #1e293b;
-    padding: 30px 20px;
-    min-height: 100vh;
-    display: flex;
-    justify-content: center;
-  }
-  .container {
-    max-width: 960px;
-    width: 100%;
-    background: #fff;
-    border-radius: 16px;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.08);
-    padding: 30px 36px;
-  }
-  h1 {
-    font-size: 22px;
-    font-weight: 700;
-    margin-bottom: 6px;
-    color: #1e40af;
-  }
-  .subtitle {
-    color: #64748b;
-    font-size: 13px;
-    margin-bottom: 24px;
-    padding-left: 12px;
-    border-left: 3px solid #3b82f6;
-    line-height: 1.7;
-  }
-  label {
-    display: block;
-    font-weight: 600;
-    font-size: 13px;
-    margin-bottom: 6px;
-    color: #334155;
-  }
-  textarea {
-    width: 100%;
-    min-height: 160px;
-    padding: 14px 16px;
-    border: 1.5px solid #cbd5e1;
-    border-radius: 10px;
-    font-family: 'Consolas', 'Monaco', monospace;
-    font-size: 13px;
-    line-height: 1.7;
-    resize: vertical;
-    background: #fafbfc;
-    transition: border-color 0.2s, box-shadow 0.2s;
-  }
-  textarea:focus {
-    outline: none;
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 4px rgba(59,130,246,0.12);
-    background: #fff;
-  }
+# -*- coding: utf-8 -*-
+"""
+高校代理扫描器 —— 五阶段 + 分片 + 断点续跑
+阶段 1 verify_existing：验证已有代理（只有分片 0 干活）
+阶段 2 common         ：12 探针 + 171 代理（TCP 探活，IP 级短路）+ 顺便代理验证
+                        → 输出 open_ips_shardN.txt（所有存活 IP）
+                        → 输出 proxy_ips_shardN.txt（有代理的 IP，供 revalidate 用）
+阶段 3 revalidate     ：对 proxy_ips_shardN.txt（有代理的 IP）二次探活
+阶段 4 proxy          ：171 代理端口（完整扫描 + 单验证，4 协议全试）
+阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
+验证：curl 通过代理访问 https://www.duxiu.com/，命中「读秀学术搜索」才算有效代理
+代理协议：http / https / socks5 / socks4（4 协议统一测读秀 https）
+"""
 
-  .input-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 14px;
-    margin: 16px 0;
-  }
-  .input-field input[type="number"] {
-    width: 100%;
-    padding: 11px 13px;
-    border: 1.5px solid #cbd5e1;
-    border-radius: 10px;
-    font-family: 'Consolas', monospace;
-    font-size: 15px;
-    background: #fafbfc;
-    transition: border-color 0.2s, box-shadow 0.2s;
-  }
-  .input-field input[type="number"]:focus {
-    outline: none;
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 4px rgba(59,130,246,0.12);
-    background: #fff;
-  }
-  .input-field .hint {
-    font-size: 11px;
-    color: #94a3b8;
-    margin-top: 4px;
-    font-family: 'Consolas', monospace;
-  }
+import os
+import re
+import sys
+import json
+import time
+import socket
+import shutil
+import tempfile
+import argparse
+import subprocess
+import ipaddress
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-  .buttons {
-    display: flex;
-    gap: 10px;
-    margin: 16px 0;
-    flex-wrap: wrap;
-  }
-  button {
-    padding: 10px 22px;
-    border: none;
-    border-radius: 8px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-  .btn-primary { background: #3b82f6; color: #fff; }
-  .btn-primary:hover { background: #2563eb; }
-  .btn-secondary { background: #e2e8f0; color: #334155; }
-  .btn-secondary:hover { background: #cbd5e1; }
-  .btn-preset { background: #dbeafe; color: #1e40af; font-size: 13px; padding: 8px 16px; }
-  .btn-preset:hover { background: #bfdbfe; }
-  .btn-preset.active { background: #3b82f6; color: #fff; }
+# ============ 配置 ============
+UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+CONNECT_TIMEOUT = 5
+MAX_TIME = 15
 
-  .error {
-    background: #fef2f2;
-    border: 1px solid #fecaca;
-    color: #b91c1c;
-    padding: 12px 16px;
-    border-radius: 8px;
-    font-size: 13px;
-    margin-top: 12px;
-    display: none;
-  }
-  .error.show { display: block; }
-  .error .title { font-weight: 700; margin-bottom: 6px; }
-  .error .item {
-    font-family: 'Consolas', monospace;
-    font-size: 12px;
-    padding: 3px 0;
-    border-bottom: 1px dashed #fecaca;
-  }
-  .error .item:last-child { border-bottom: none; }
+VERIFY_TARGETS = [
+    {
+        'name': 'duxiu',
+        'urls': ['https://www.duxiu.com/'],
+        'keywords': ['读秀学术搜索'],
+        'exclude': ['系统登录', '用户名', '密 码', '请完成安全验证'],
+        'protocols': ['http', 'https', 'socks5', 'socks4'],
+    },
+]
 
-  .results { margin-top: 20px; display: none; }
-  .results.show { display: block; }
-  .summary-cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 12px;
-    margin-bottom: 22px;
-  }
-  .card {
-    background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
-    border: 1px solid #bae6fd;
-    border-radius: 12px;
-    padding: 16px 18px;
-  }
-  .card .label {
-    font-size: 12px;
-    color: #0369a1;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 6px;
-  }
-  .card .value {
-    font-size: 22px;
-    font-weight: 700;
-    color: #0c4a6e;
-    font-family: 'Consolas', monospace;
-  }
-  .card.warn {
-    background: linear-gradient(135deg, #fef3c7, #fde68a);
-    border-color: #fcd34d;
-  }
-  .card.warn .label { color: #92400e; }
-  .card.warn .value { color: #78350f; }
+MAX_RUNTIME_SEC = int(os.environ.get('MAX_RUNTIME_SEC', 20880))
 
-  .stages {
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    overflow: hidden;
-    margin-bottom: 22px;
-  }
-  .stages table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  .stages thead { background: #f1f5f9; }
-  .stages th {
-    padding: 10px 14px;
-    text-align: left;
-    font-size: 12px;
-    font-weight: 700;
-    color: #475569;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
-    border-bottom: 1px solid #e2e8f0;
-  }
-  .stages td {
-    padding: 11px 14px;
-    border-bottom: 1px solid #f1f5f9;
-    font-family: 'Consolas', monospace;
-    font-size: 13px;
-  }
-  .stages tbody tr:last-child td { border-bottom: none; }
-  .stages tbody tr:hover td { background: #f8fafc; }
-  .stages .stage-name {
-    font-weight: 600;
-    color: #1e40af;
-    font-family: -apple-system, sans-serif;
-    font-size: 14px;
-  }
-  .stages .time-cell { color: #059669; font-weight: 700; }
-  .stages .time-cell.long { color: #dc2626; }
-  .stages .note {
-    color: #94a3b8;
-    font-size: 12px;
-    font-family: -apple-system, sans-serif;
-  }
-  .total-block {
-    background: #0f172a;
-    color: #e2e8f0;
-    border-radius: 12px;
-    padding: 20px 24px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 12px;
-  }
-  .total-block .label { font-size: 14px; color: #94a3b8; }
-  .total-block .value {
-    font-size: 28px;
-    font-weight: 700;
-    color: #10b981;
-    font-family: 'Consolas', monospace;
-  }
-  .total-block .hint {
-    font-size: 12px;
-    color: #64748b;
-    margin-top: 4px;
-  }
-  .footer {
-    margin-top: 22px;
-    padding-top: 16px;
-    border-top: 1px solid #e2e8f0;
-    font-size: 12px;
-    color: #94a3b8;
-    text-align: center;
-    line-height: 1.7;
-  }
-  .preset-row {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-bottom: 8px;
-    align-items: center;
-  }
-  .preset-label {
-    font-size: 12px;
-    color: #64748b;
-    font-weight: 600;
-    margin-right: 4px;
-  }
-</style>
-</head>
-<body>
-<div class="container">
-  <h1>🎯 IP 段扫描时间估算器</h1>
-  <div class="subtitle">
-    输入 IP 段 + 并发参数，估算完整扫描流程耗时<br>
-    默认：40 × 20 并发、TCP_TIMEOUT=1.5s、8 分片、175 探针端口、GitHub 4 核 16G
-  </div>
 
-  <label for="input">IP 段列表（每行一个，支持 CIDR / 起止范围 / 单 IP / QQWry 导出格式）</label>
-  <textarea id="input" placeholder="示例：
-59.71.106.0/24
-183.172.0.0 - 183.172.255.255
-114.214.160.0 - 114.214.255.255
-[1]	202.38.64.0 - 202.38.127.255 | 中国 安徽 合肥 中国科学技术大学 教育网 CN AS
-59.71.106.5"></textarea>
+def _build_probe_ports_12():
+    return [22, 80, 443, 3389, 1080, 1081, 8080, 8081, 7890, 3128, 8000, 8443]
 
-  <div class="preset-row" style="margin-top:14px;">
-    <span class="preset-label">快速预设：</span>
-    <button class="btn-preset" onclick="applyPreset(20,10,1.5)">20 × 10 / 1.5s（基线）</button>
-    <button class="btn-preset" onclick="applyPreset(25,15,1.5)">25 × 15 / 1.5s（375并发）</button>
-    <button class="btn-preset" onclick="applyPreset(30,20,1.5)">30 × 20 / 1.5s（600并发）</button>
-    <button class="btn-preset" onclick="applyPreset(40,20,1.5)">40 × 20 / 1.5s（800并发）</button>
-    <button class="btn-preset" onclick="applyPreset(40,25,1.5)">40 × 25 / 1.5s（1000并发）</button>
-    <button class="btn-preset" onclick="applyPreset(40,25,1.0)">40 × 25 / 1.0s（激进）</button>
-  </div>
 
-  <div class="input-grid">
-    <div class="input-field">
-      <label for="tcpWorkersInput">TCP 并发数</label>
-      <input type="number" id="tcpWorkersInput" min="1" max="200" value="40">
-      <div class="hint">TCP_WORKERS</div>
-    </div>
-    <div class="input-field">
-      <label for="portWorkersInput">端口并发数</label>
-      <input type="number" id="portWorkersInput" min="1" max="200" value="20">
-      <div class="hint">PORT_WORKERS</div>
-    </div>
-    <div class="input-field">
-      <label for="tcpTimeoutInput">TCP 超时（秒）</label>
-      <input type="number" id="tcpTimeoutInput" min="0.1" max="10" step="0.1" value="1.5">
-      <div class="hint">TCP_TIMEOUT</div>
-    </div>
-    <div class="input-field">
-      <label for="surviveInput">预估存活 IP 数</label>
-      <input type="number" id="surviveInput" min="0" value="0" placeholder="例如 500">
-      <div class="hint">经验：0.5% ~ 1%</div>
-    </div>
-  </div>
+def _build_proxy_ports():
+    groups = [
+        (1080, 1090), (10808, 10820), (7890, 7899), (8080, 8090),
+        (8000, 8010), (8888, 8890), (9000, 9010), (9090, 9099),
+        (10000, 10010), (10080, 10086), (3128, 3130), (8388, 8389),
+        (8443, 8444), (2052, 2096), (51820, 51830), (1194, 1199),
+        (9050, 9051), (9150, 9151),
+    ]
+    s = set()
+    for a, b in groups:
+        s.update(range(a, b + 1))
+    return sorted(s)
 
-  <div class="buttons">
-    <button class="btn-primary" onclick="calculate()">📊 计算</button>
-    <button class="btn-secondary" onclick="loadExample()">📋 载入示例</button>
-    <button class="btn-secondary" onclick="clearAll()">🗑 清空</button>
-  </div>
 
-  <div class="error" id="errorBox">
-    <div class="title">❌ 无法识别的行（已忽略）：</div>
-    <div id="errorItems"></div>
-  </div>
+def _build_common_ports():
+    probe12 = _build_probe_ports_12()
+    proxy = _build_proxy_ports()
+    seen = set()
+    result = []
+    for p in probe12:
+        if p not in seen:
+            seen.add(p)
+            result.append(p)
+    for p in proxy:
+        if p not in seen:
+            seen.add(p)
+            result.append(p)
+    return result
 
-  <div class="results" id="results">
-    <div class="summary-cards">
-      <div class="card">
-        <div class="label">总 IP 数</div>
-        <div class="value" id="totalIPs">—</div>
-      </div>
-      <div class="card">
-        <div class="label">每分片 IP 数</div>
-        <div class="value" id="perShard">—</div>
-      </div>
-      <div class="card">
-        <div class="label">全局并发</div>
-        <div class="value" id="concurrency">—</div>
-      </div>
-      <div class="card">
-        <div class="label">task/s</div>
-        <div class="value" id="taskRate">—</div>
-      </div>
-      <div class="card">
-        <div class="label">common 轮数</div>
-        <div class="value" id="rounds">—</div>
-      </div>
-    </div>
 
-    <div class="stages">
-      <table>
-        <thead>
-          <tr>
-            <th style="width:28%">阶段</th>
-            <th style="width:22%">预估耗时</th>
-            <th>说明</th>
-          </tr>
-        </thead>
-        <tbody id="stagesBody"></tbody>
-      </table>
-    </div>
+PROBE_PORTS_12 = _build_probe_ports_12()
+PROXY_PORTS = _build_proxy_ports()
+COMMON_PORTS = _build_common_ports()
+FULL_PORTS = list(range(1, 65536))
 
-    <div class="total-block">
-      <div>
-        <div class="label">总预估耗时</div>
-        <div class="value" id="totalTime">—</div>
-        <div class="hint" id="totalHint"></div>
-      </div>
-    </div>
-  </div>
+parser = argparse.ArgumentParser()
+parser.add_argument('--shard', type=int, default=0)
+parser.add_argument('--shard-total', type=int, default=1)
+args, _ = parser.parse_known_args()
 
-  <div class="footer">
-    <span id="footerParams">参数：40 × 20 = 800 并发 · TCP_TIMEOUT = 1.5s</span><br>
-    8 分片并行 · 175 探针端口（12 探针 + 171 代理去重）· IP 级短路 · 单轮上限 5.8 小时 · GitHub 4 核 16G
-  </div>
-</div>
+SHARD_INDEX = args.shard
+SHARD_TOTAL = args.shard_total
 
-<script>
-  // ============ 常量 ============
-  // AVG_PORTS: IP 级短路后平均实际扫的端口数（基于多组实测反推，~170）
-  const AVG_PORTS = 170;
-  const IP_COOLDOWN = 0.5;              // 每 IP 扫完的固定等待
-  const SHARD_TOTAL = 8;
-  const MAX_RUNTIME_SEC = 5.8 * 3600;
-  const PROXY_SEC_PER_IP = 30;          // proxy 阶段每 IP 耗时（171 端口 + 读秀验证）
-  const OVERHEAD_SEC = 300;             // merge + 调度开销
+TCP_TIMEOUT = 1.5
+VERIFY_TIMEOUT = 30
+VERIFY_RETRY = 0
+VERIFY_DELAY = 0.0
+TCP_WORKERS = 40
+PORT_WORKERS = 20
+IP_COOLDOWN = 0.5
+VERIFY_RATE_LIMIT = 1
 
-  // ============ IP 解析 ============
-  function ipToInt(ip) {
-    const parts = ip.split('.');
-    if (parts.length !== 4) return null;
-    let n = 0;
-    for (const p of parts) {
-      const v = parseInt(p, 10);
-      if (isNaN(v) || v < 0 || v > 255) return null;
-      n = (n << 8) | v;
+INPUT_FILE = 'ip_list.txt'
+PHASE_FILE = 'phase.json'
+RUNNER_TEMP = os.environ.get('RUNNER_TEMP', '/tmp')
+
+if SHARD_TOTAL > 1:
+    STATE_FILE = 'progress_shard%d.json' % SHARD_INDEX
+    OUTPUT_FILE = 'working_proxies_shard%d.txt' % SHARD_INDEX
+    OPEN_IPS_FILE = 'open_ips_shard%d.txt' % SHARD_INDEX
+    PROXY_IPS_FILE = 'proxy_ips_shard%d.txt' % SHARD_INDEX
+    OPEN_IPS_REVALIDATED_FILE = 'open_ips_revalidated_shard%d.txt' % SHARD_INDEX
+    PROXY_MISSING_FILE = 'proxy_missing_shard%d.txt' % SHARD_INDEX
+else:
+    STATE_FILE = 'progress.json'
+    OUTPUT_FILE = 'working_proxies.txt'
+    OPEN_IPS_FILE = 'open_ips.txt'
+    PROXY_IPS_FILE = 'proxy_ips.txt'
+    OPEN_IPS_REVALIDATED_FILE = 'open_ips_revalidated.txt'
+    PROXY_MISSING_FILE = 'proxy_missing.txt'
+
+CRLF = '\r\n'
+EXISTING_PROXIES_FILE = 'working_proxies.txt'
+ALIVE_IP_RANGES_FILE = 'alive_ip_ranges.txt'
+
+CURL = shutil.which('curl') or 'curl'
+
+PROTOCOLS = ('http', 'https', 'socks5', 'socks4')
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+_WS_RE = re.compile(r'\s+')
+
+
+def _clean_note(s):
+    if not s:
+        return ''
+    s = s.replace('\r', ' ').replace('\n', ' ').replace('\t', ' ')
+    s = s.replace('@', ' ')
+    return _WS_RE.sub(' ', s).strip()
+
+
+QQWRY_RANGE_RE = re.compile(
+    r'(\d{1,3}(?:\.\d{1,3}){3})\s*-\s*(\d{1,3}(?:\.\d{1,3}){3})'
+)
+SINGLE_IP_RE = re.compile(r'(\d{1,3}(?:\.\d{1,3}){3})')
+
+
+def _valid_ipv4(s):
+    try:
+        ipaddress.IPv4Address(s)
+        return True
+    except Exception:
+        return False
+
+
+def parse_ip_range(line):
+    line = line.strip()
+    if not line or line.startswith('#'):
+        return None
+    for tok in line.split():
+        if '/' in tok:
+            try:
+                net = ipaddress.ip_network(tok, strict=False)
+                if net.version != 4:
+                    continue
+                return int(net.network_address), int(net.broadcast_address), ''
+            except Exception:
+                pass
+    m = QQWRY_RANGE_RE.search(line)
+    if m:
+        a, b = m.group(1), m.group(2)
+        if _valid_ipv4(a) and _valid_ipv4(b):
+            sa = int(ipaddress.IPv4Address(a))
+            sb = int(ipaddress.IPv4Address(b))
+            note = ''
+            if '|' in line:
+                note = _clean_note(line.split('|', 1)[1])
+            return min(sa, sb), max(sa, sb), note
+    m = SINGLE_IP_RE.search(line)
+    if m:
+        a = m.group(1)
+        if _valid_ipv4(a):
+            return int(ipaddress.IPv4Address(a)), int(ipaddress.IPv4Address(a)), ''
+    return None
+
+
+def load_ip_ranges(path):
+    ranges = []
+    with open(path, 'r', encoding='utf-8-sig', errors='ignore') as f:
+        for line in f:
+            r = parse_ip_range(line)
+            if r:
+                ranges.append(r)
+    return ranges
+
+
+def ip_int_to_str(ip_int):
+    return str(ipaddress.IPv4Address(ip_int))
+
+
+def load_existing_proxies(path):
+    """返回 set，key 是 'ip:port:proto'"""
+    s = set()
+    if not os.path.exists(path):
+        return s
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('@') or line.startswith('#'):
+                    continue
+                if '@' in line:
+                    parts = line.split('@')
+                    if len(parts) >= 2:
+                        s.add('%s:%s' % (parts[0].strip(),
+                                         parts[1].strip().lower()))
+                elif '#' in line:
+                    p = line.split('#', 1)[0].strip()
+                    s.add(p)
+                else:
+                    parts = line.split()
+                    if parts:
+                        s.add(parts[0])
+    except Exception:
+        pass
+    return s
+
+
+def load_proxy_list(path):
+    result = []
+    if not os.path.exists(path):
+        return result
+    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('@') or line.startswith('#'):
+                continue
+            parts = line.split('@')
+            if len(parts) < 2:
+                continue
+            addr = parts[0].strip()
+            proto = parts[1].strip().lower()
+            note = '@'.join(parts[2:]).strip() if len(parts) > 2 else ''
+            if ':' not in addr:
+                continue
+            ip, port_str = addr.rsplit(':', 1)
+            try:
+                port = int(port_str)
+            except ValueError:
+                continue
+            if proto not in PROTOCOLS:
+                continue
+            result.append((ip, port, proto, note))
+    return result
+
+
+def load_ip_set(path):
+    s = set()
+    if not os.path.exists(path):
+        return s
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    s.add(line)
+    except Exception:
+        pass
+    return s
+
+
+def load_json(path):
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def save_json(path, data):
+    try:
+        tmp = path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except Exception as e:
+        log('[!] 保存 %s 失败: %s' % (path, e))
+
+
+_rate_lock = threading.Lock()
+_rate_last = [0.0]
+
+
+def verify_rate_wait():
+    if VERIFY_RATE_LIMIT <= 0:
+        return
+    min_interval = 1.0 / VERIFY_RATE_LIMIT
+    while True:
+        with _rate_lock:
+            now = time.time()
+            wait = _rate_last[0] + min_interval - now
+            if wait <= 0:
+                _rate_last[0] = now
+                return
+        time.sleep(min(wait, 0.2))
+
+
+def tcp_check(ip, port, timeout=TCP_TIMEOUT):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect((ip, port))
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def _build_curl_args(ip, port, protocol, url):
+    address = '%s:%d' % (ip, port)
+    if protocol == 'http':
+        return ['-x', address, url]
+    if protocol == 'https':
+        return ['-x', 'https://' + address, url]
+    if protocol == 'socks5':
+        return ['--socks5-hostname', address, url]
+    if protocol == 'socks4':
+        return ['--socks4a', address, url]
+    return None
+
+
+def _text_contains_any(raw, keywords, excludes):
+    try:
+        text = raw.decode('utf-8', errors='ignore')
+    except Exception:
+        return False
+    if any(ex in text for ex in excludes):
+        return False
+    if any(kw in text for kw in keywords):
+        return True
+    return False
+
+
+def _verify_one_url(ip, port, protocol, url, keywords, excludes):
+    args = _build_curl_args(ip, port, protocol, url)
+    if args is None:
+        return False
+    verify_rate_wait()
+
+    cookie_fd, cookie_path = tempfile.mkstemp(prefix='curl_cookie_', suffix='.txt')
+    os.close(cookie_fd)
+
+    try:
+        cmd = [
+            CURL,
+            '-sS',
+            '-L',
+            '--max-redirs', '5',
+            '-c', cookie_path,
+            '-b', cookie_path,
+            '-4',
+            '--connect-timeout', str(CONNECT_TIMEOUT),
+            '--max-time', str(MAX_TIME),
+            '-A', UA,
+            '-H', 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            '-H', 'Accept-Language: zh-CN,zh;q=0.9,en;q=0.8',
+        ] + args
+        proc = subprocess.run(cmd, capture_output=True, timeout=MAX_TIME + 3)
+        return _text_contains_any(proc.stdout, keywords, excludes)
+    except subprocess.TimeoutExpired:
+        return False
+    except Exception:
+        return False
+    finally:
+        try:
+            if os.path.exists(cookie_path):
+                os.remove(cookie_path)
+        except Exception:
+            pass
+
+
+def _verify_one_target(ip, port, protocol, target):
+    for url in target['urls']:
+        if _verify_one_url(ip, port, protocol, url,
+                           target['keywords'], target.get('exclude', [])):
+            return True
+    return False
+
+
+def verify_proxy(ip, port, protocol):
+    """
+    单验证：curl 通过代理访问 https://www.duxiu.com/，命中「读秀学术搜索」即通过。
+    4 协议统一测这一个目标。
+    """
+    for target in VERIFY_TARGETS:
+        if protocol not in target.get('protocols', []):
+            continue
+        if not _verify_one_target(ip, port, protocol, target):
+            return False
+    return True
+
+
+def scan_port_common(ip, port):
+    return tcp_check(ip, port), []
+
+
+def scan_port_full(ip, port):
+    """返回 (is_open, [(ip, port, proto), ...])，所有支持的协议"""
+    if not tcp_check(ip, port):
+        return False, []
+    working = []
+    for proto in PROTOCOLS:
+        if verify_proxy(ip, port, proto):
+            working.append((ip, port, proto))
+    return True, working
+
+
+def slice_ranges(ranges, shard_index, shard_total):
+    if shard_total <= 1:
+        return ranges
+    total = sum(e - s + 1 for s, e, _ in ranges)
+    shard_size = (total + shard_total - 1) // shard_total
+    lo = shard_index * shard_size
+    hi = min(lo + shard_size, total)
+    if lo >= hi:
+        return []
+    result = []
+    cursor = 0
+    for s, e, note in ranges:
+        span = e - s + 1
+        seg_lo = cursor
+        seg_hi = cursor + span
+        if seg_hi <= lo or seg_lo >= hi:
+            cursor = seg_hi
+            continue
+        local_lo = max(0, lo - seg_lo)
+        local_hi = min(span, hi - seg_lo)
+        result.append((s + local_lo, s + local_hi - 1, note))
+        cursor = seg_hi
+    return result
+
+
+def expand_ranges_to_ips(ranges):
+    flat = []
+    for s, e, note in ranges:
+        for ip_int in range(s, e + 1):
+            flat.append((ip_int, note))
+    return flat
+
+
+def get_phase_config(phase):
+    if phase == 'common':
+        return COMMON_PORTS, None, OPEN_IPS_FILE
+    elif phase == 'revalidate':
+        # ★ 上游改成"有代理的 IP"
+        return COMMON_PORTS, PROXY_IPS_FILE, OPEN_IPS_REVALIDATED_FILE
+    elif phase == 'proxy':
+        return PROXY_PORTS, OPEN_IPS_REVALIDATED_FILE, PROXY_MISSING_FILE
+    elif phase == 'full':
+        return FULL_PORTS, PROXY_MISSING_FILE, None
+    else:
+        raise ValueError('未知阶段: %s' % phase)
+
+
+def _skip_this_shard(state_file, output_filter_file, phase, ports_count):
+    state = {
+        'position': 0, 'done': 0, 'total_ips': 0, 'total_tasks': 0,
+        'ports_count': ports_count, 'phase': phase,
+        'shard_index': SHARD_INDEX, 'shard_total': SHARD_TOTAL,
+        'started_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'completed': True,
+        'completed_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'session': 1,
     }
-    return n >>> 0;
-  }
+    save_json(state_file, state)
+    if output_filter_file:
+        try:
+            with open(output_filter_file, 'w', encoding='utf-8', newline='') as f:
+                pass
+        except Exception:
+            pass
 
-  function parseRange(line) {
-    line = line.trim();
-    if (!line || line.startsWith('#')) return null;
 
-    for (const tok of line.split(/\s+/)) {
-      const m = tok.match(/^(\d+\.\d+\.\d+\.\d+)\/(\d+)$/);
-      if (m) {
-        const ip = ipToInt(m[1]);
-        const prefix = parseInt(m[2], 10);
-        if (ip === null || prefix < 0 || prefix > 32) continue;
-        const mask = prefix === 0 ? 0 : (0xFFFFFFFF << (32 - prefix)) >>> 0;
-        const start = (ip & mask) >>> 0;
-        const end = (start | (~mask >>> 0)) >>> 0;
-        return { start, end };
-      }
+# ============ verify_existing 阶段 ============
+
+def run_verify_existing_phase():
+    if SHARD_INDEX != 0:
+        log('[verify_existing] 分片 %d 跳过（只有分片 0 做验证）' % SHARD_INDEX)
+        _skip_this_shard(STATE_FILE, None, 'verify_existing', 0)
+        return
+
+    proxy_list = load_proxy_list(EXISTING_PROXIES_FILE)
+    log('[verify_existing] 从 %s 读到 %d 个历史代理'
+        % (EXISTING_PROXIES_FILE, len(proxy_list)))
+
+    with open(OUTPUT_FILE, 'w', encoding='utf-8', newline='') as f:
+        f.write('@ 代理扫描结果 [verify_existing]' + CRLF)
+        f.write('@ 开始时间: %s' % time.strftime('%Y-%m-%d %H:%M:%S') + CRLF)
+        f.write('@ 验证: 读秀 https（单验证）' + CRLF)
+        f.write('@' + '-' * 58 + CRLF)
+
+    if not proxy_list:
+        log('[verify_existing] 无历史代理可验证，跳过')
+        state = {
+            'position': 0, 'done': 0, 'total_ips': 0, 'total_tasks': 0,
+            'ports_count': 0, 'phase': 'verify_existing',
+            'shard_index': 0, 'shard_total': SHARD_TOTAL,
+            'started_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'completed': True,
+            'completed_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'session': 1,
+        }
+        save_json(STATE_FILE, state)
+        return
+
+    valid_count = [0]
+    checked_count = [0]
+    found_lock = threading.Lock()
+    t0 = time.time()
+
+    def verify_one(item):
+        ip, port, proto, note = item
+        ok = verify_proxy(ip, port, proto)
+        with found_lock:
+            checked_count[0] += 1
+            n = checked_count[0]
+            if ok:
+                valid_count[0] += 1
+                if note:
+                    line_out = '%s:%d@%s@%s' % (ip, port, proto, note)
+                else:
+                    line_out = '%s:%d@%s' % (ip, port, proto)
+                with open(OUTPUT_FILE, 'a', encoding='utf-8', newline='') as f:
+                    f.write(line_out + CRLF)
+                log('[+] 仍然有效: %s' % line_out)
+            else:
+                log('[-] 已失效: %s:%d@%s' % (ip, port, proto))
+            if n % 20 == 0:
+                elapsed = time.time() - t0
+                log('[verify_existing] 已检查 %d/%d | 有效 %d | %.1f s'
+                    % (n, len(proxy_list), valid_count[0], elapsed))
+
+    port_pool = ThreadPoolExecutor(max_workers=TCP_WORKERS * PORT_WORKERS)
+    try:
+        futures = [port_pool.submit(verify_one, item) for item in proxy_list]
+        for fut in as_completed(futures):
+            try:
+                fut.result()
+            except Exception as ex:
+                log('[!] verify_one 异常: %s' % ex)
+    finally:
+        port_pool.shutdown(wait=False)
+
+    dt = time.time() - t0
+    log('=' * 60)
+    log('[verify_existing] 验证完成: %d/%d 仍然有效，耗时 %.1f 秒'
+        % (valid_count[0], len(proxy_list), dt))
+
+    state = {
+        'position': len(proxy_list),
+        'done': len(proxy_list),
+        'total_ips': len(proxy_list),
+        'phase': 'verify_existing',
+        'shard_index': 0, 'shard_total': SHARD_TOTAL,
+        'started_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'completed': True,
+        'completed_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'session': 1,
     }
+    save_json(STATE_FILE, state)
 
-    const mRange = line.match(/(\d+\.\d+\.\d+\.\d+)\s*-\s*(\d+\.\d+\.\d+\.\d+)/);
-    if (mRange) {
-      const a = ipToInt(mRange[1]);
-      const b = ipToInt(mRange[2]);
-      if (a !== null && b !== null) {
-        return { start: Math.min(a, b), end: Math.max(a, b) };
-      }
+
+# ============ main ============
+
+def main():
+    if not os.path.exists(INPUT_FILE):
+        log('未找到 %s' % INPUT_FILE)
+        sys.exit(1)
+
+    phase_state = load_json(PHASE_FILE) or {
+        'current': 'common',
+        'common_completed': False,
+        'revalidate_completed': False,
+        'proxy_completed': False,
+        'full_completed': False,
     }
+    current_phase = phase_state.get('current', 'common')
 
-    const mSingle = line.match(/(\d+\.\d+\.\d+\.\d+)/);
-    if (mSingle) {
-      const ip = ipToInt(mSingle[1]);
-      if (ip !== null) return { start: ip, end: ip };
-    }
+    if current_phase == 'verify_existing':
+        run_verify_existing_phase()
+        return
 
-    return null;
-  }
+    all_ranges = load_ip_ranges(INPUT_FILE)
+    if not all_ranges:
+        log('未读取到有效 IP 范围')
+        sys.exit(1)
 
-  // ============ 数字格式化 ============
-  function fmtNum(n) {
-    return n.toLocaleString('en-US');
-  }
+    PORTS, upstream_file, output_filter_file = get_phase_config(current_phase)
 
-  function fmtTime(seconds) {
-    if (seconds < 60) return seconds.toFixed(0) + ' 秒';
-    if (seconds < 3600) return (seconds / 60).toFixed(1) + ' 分钟';
-    if (seconds < 86400) {
-      const h = Math.floor(seconds / 3600);
-      const m = Math.round((seconds % 3600) / 60);
-      return h + ' 小时 ' + m + ' 分';
-    }
-    const d = Math.floor(seconds / 86400);
-    const h = Math.round((seconds % 86400) / 3600);
-    return d + ' 天 ' + h + ' 小时';
-  }
+    ranges = slice_ranges(all_ranges, SHARD_INDEX, SHARD_TOTAL)
+    ip_list = expand_ranges_to_ips(ranges)
 
-  // ============ 核心公式 ============
-  // 秒/IP = AVG_PORTS × TCP_TIMEOUT / 全局并发 + IP_COOLDOWN / TCP_WORKERS
-  // 说明：cooldown 由多个 worker 并行分摊，所以除以 TCP_WORKERS
-  function secPerIp(tcpTimeout, tcpWorkers, portWorkers) {
-    const concurrency = tcpWorkers * portWorkers;
-    return (AVG_PORTS * tcpTimeout) / concurrency + (IP_COOLDOWN / tcpWorkers);
-  }
+    if upstream_file is not None:
+        if os.path.exists(upstream_file):
+            wanted = load_ip_set(upstream_file)
+            if wanted:
+                before = len(ip_list)
+                ip_list = [(ip_int, note) for (ip_int, note) in ip_list
+                           if ip_int_to_str(ip_int) in wanted]
+                log('[%s] 上游过滤 (%s): %d → %d'
+                    % (current_phase, upstream_file, before, len(ip_list)))
+                if current_phase == 'revalidate':
+                    ip_note_map = {}
+                    for s, e, note in all_ranges:
+                        if not note:
+                            continue
+                        for ip_int, _ in ip_list:
+                            if s <= ip_int <= e:
+                                ip_note_map[ip_int] = note
+                    ip_list = [(ip_int, ip_note_map.get(ip_int, ''))
+                               for ip_int, _ in ip_list]
+            else:
+                log('[%s] 上游文件为空，本片无待扫 IP，跳过' % current_phase)
+                _skip_this_shard(STATE_FILE, output_filter_file, current_phase, len(PORTS))
+                return
+        else:
+            log('[%s] 无上游文件 %s，视为无待扫 IP，本片跳过'
+                % (current_phase, upstream_file))
+            _skip_this_shard(STATE_FILE, output_filter_file, current_phase, len(PORTS))
+            return
 
-  function taskPerSec(tcpTimeout, tcpWorkers, portWorkers) {
-    const concurrency = tcpWorkers * portWorkers;
-    return concurrency / tcpTimeout;
-  }
+    total_ips = len(ip_list)
 
-  // ============ 主逻辑 ============
-  function calculate() {
-    const text = document.getElementById('input').value;
-    const tcpWorkers = Math.max(1, parseInt(document.getElementById('tcpWorkersInput').value, 10) || 40);
-    const portWorkers = Math.max(1, parseInt(document.getElementById('portWorkersInput').value, 10) || 20);
-    const tcpTimeout = Math.max(0.1, parseFloat(document.getElementById('tcpTimeoutInput').value) || 1.5);
-    const surviveIPs = Math.max(0, parseInt(document.getElementById('surviveInput').value, 10) || 0);
+    def ip_at_position(pos):
+        return ip_list[pos]
 
-    const lines = text.split(/\r?\n/);
-    let totalIPs = 0;
-    const errors = [];
+    state = load_json(STATE_FILE)
+    new_round = True
+    if (state and not state.get('completed')
+            and state.get('total_ips') == total_ips
+            and state.get('phase') == current_phase):
+        new_round = False
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const r = parseRange(trimmed);
-      if (r) {
-        totalIPs += (r.end - r.start + 1);
-      } else {
-        errors.push(trimmed);
-      }
-    }
+    if new_round:
+        state = {
+            'position': 0, 'done': 0, 'total_ips': total_ips,
+            'phase': current_phase, 'shard_index': SHARD_INDEX,
+            'shard_total': SHARD_TOTAL,
+            'started_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'completed': False, 'session': 1,
+        }
+        with open(OUTPUT_FILE, 'w', encoding='utf-8', newline='') as f:
+            f.write('@ 代理扫描结果 [分片 %d/%d, 阶段 %s]'
+                    % (SHARD_INDEX, SHARD_TOTAL, current_phase) + CRLF)
+            f.write('@ 开始时间: %s' % state['started_at'] + CRLF)
+            f.write('@ 验证: 读秀 https（单验证）' + CRLF)
+            f.write('@' + '-' * 58 + CRLF)
+        existing = set()
+        log('=== 新一轮扫描 [分片 %d/%d, phase=%s] ==='
+            % (SHARD_INDEX, SHARD_TOTAL, current_phase))
 
-    const errBox = document.getElementById('errorBox');
-    const errItems = document.getElementById('errorItems');
-    if (errors.length > 0) {
-      errBox.classList.add('show');
-      errItems.innerHTML = errors.map(e =>
-        '<div class="item">' + escapeHtml(e) + '</div>'
-      ).join('');
-    } else {
-      errBox.classList.remove('show');
-      errItems.innerHTML = '';
-    }
+        # ★ 清空上一轮的 alive_ip_ranges.txt（仅分片 0 做）
+        if SHARD_INDEX == 0:
+            try:
+                if os.path.exists(ALIVE_IP_RANGES_FILE):
+                    os.remove(ALIVE_IP_RANGES_FILE)
+                    log('已清空上一轮的 %s' % ALIVE_IP_RANGES_FILE)
+            except Exception:
+                pass
+    else:
+        state['session'] = state.get('session', 1) + 1
+        existing = load_existing_proxies(OUTPUT_FILE)
+        log('=== 续跑 [分片 %d/%d, phase=%s, session %d] ==='
+            % (SHARD_INDEX, SHARD_TOTAL, current_phase, state['session']))
+        log('上次位置: %d / %d (%.1f%%)'
+            % (state['position'], total_ips,
+               state['position'] * 100.0 / total_ips if total_ips else 0))
 
-    if (totalIPs === 0) {
-      document.getElementById('results').classList.remove('show');
-      return;
-    }
+    start_position = state['position']
 
-    const perShard = Math.ceil(totalIPs / SHARD_TOTAL);
-    const secPerIpValue = secPerIp(tcpTimeout, tcpWorkers, portWorkers);
-    const tps = taskPerSec(tcpTimeout, tcpWorkers, portWorkers);
-    const concurrency = tcpWorkers * portWorkers;
+    log('本片 IP 段数: %d' % len(ranges))
+    log('本片 IP 总数: %d' % total_ips)
+    log('端口数: %d' % len(PORTS))
+    if current_phase in ('common', 'revalidate'):
+        log('  前 12 探针: %s' % PROBE_PORTS_12)
+    log('本次起点: IP #%d' % state['position'])
+    log('已找到代理: %d' % len(existing))
+    log('搜索连接超时: %s s | 验证超时: %d s' % (TCP_TIMEOUT, VERIFY_TIMEOUT))
+    log('IP 并发: %d  ×  端口并发: %d  =  全局最大 %d 条连接'
+        % (TCP_WORKERS, PORT_WORKERS, TCP_WORKERS * PORT_WORKERS))
+    log('验证方式: curl (%s)' % CURL)
+    for t in VERIFY_TARGETS:
+        log('  验证目标 [%s]: %s | 适用协议: %s | 关键词: %s | 排除: %s'
+            % (t['name'], t['urls'], t.get('protocols', ['?']),
+               t['keywords'], t.get('exclude', [])))
+    log('成功判定: 命中读秀页面（单验证）')
+    log('验证协议: %s（不短路，全试）' % (', '.join(PROTOCOLS)))
+    log('curl 超时: 连接 %d s / 总 %d s' % (CONNECT_TIMEOUT, MAX_TIME))
+    log('全局限速: %d 次/秒' % VERIFY_RATE_LIMIT if VERIFY_RATE_LIMIT > 0 else '不限速')
+    log('最大运行时长: %d 秒 (%.2f 小时)'
+        % (MAX_RUNTIME_SEC, MAX_RUNTIME_SEC / 3600.0))
+    log('-' * 60)
 
-    // common 阶段：每分片独立跑
-    const commonSec = perShard * secPerIpValue;
-    const commonRounds = Math.ceil(commonSec / MAX_RUNTIME_SEC);
-    const commonRealSec = commonSec <= MAX_RUNTIME_SEC ? commonSec : (commonRounds * MAX_RUNTIME_SEC);
+    pos_lock = threading.Lock()
+    current_pos = [state['position']]
+    found_lock = threading.Lock()
+    found_count = [len(existing)]
+    processed_ips = [0]
+    port_tasks = [0]
+    stop_flag = [False]
+    t0 = time.time()
 
-    // revalidate：只扫"有代理的 IP"（约存活 IP 的 5-10%），耗时很小
-    // 保守用 5% 估算
-    const proxyIPs = Math.max(0, Math.round(surviveIPs * 0.05));
-    const revalidateSec = proxyIPs > 0 ? (proxyIPs * secPerIpValue / SHARD_TOTAL) : 0;
+    open_ips_lock = threading.Lock()
+    open_ips = set()
+    proxy_ips = set()
+    revalidated_ips = set()
+    proxy_found_ips = set()
+    proxy_missing_ips = set()
 
-    // proxy：171 端口 + 读秀验证（被 VERIFY_RATE_LIMIT 限制，与并发无关）
-    const proxySec = proxyIPs > 0 ? (proxyIPs * PROXY_SEC_PER_IP / SHARD_TOTAL) : 0;
+    def next_position():
+        with pos_lock:
+            if current_pos[0] >= total_ips:
+                return None
+            p = current_pos[0]
+            current_pos[0] += 1
+            return p
 
-    const totalSec = commonRealSec + revalidateSec + proxySec + OVERHEAD_SEC;
+    port_pool = ThreadPoolExecutor(max_workers=TCP_WORKERS * PORT_WORKERS)
+    if current_phase in ('common', 'revalidate'):
+        scan_fn = scan_port_common
+        short_circuit = True
+    else:
+        scan_fn = scan_port_full
+        short_circuit = False
 
-    // 卡片
-    document.getElementById('totalIPs').textContent = fmtNum(totalIPs);
-    document.getElementById('perShard').textContent = fmtNum(perShard);
-    document.getElementById('concurrency').textContent = concurrency;
-    document.getElementById('taskRate').textContent = tps.toFixed(0);
-    document.getElementById('rounds').textContent =
-      (commonRounds > 1 ? commonRounds + ' 轮' : '1 轮');
+    def worker():
+        while not stop_flag[0]:
+            p = next_position()
+            if p is None:
+                return
+            ip_int, note = ip_at_position(p)
+            ip = ip_int_to_str(ip_int)
 
-    // 阶段表
-    const tbody = document.getElementById('stagesBody');
-    const rows = [];
+            ip_has_open = False
+            ip_has_proxy = False
+            ip_open_count = 0
+            ip_proxy_count = 0
 
-    rows.push(`
-      <tr>
-        <td class="stage-name">common</td>
-        <td class="time-cell ${commonRealSec > 3600 ? 'long' : ''}">${fmtTime(commonRealSec)}</td>
-        <td class="note">
-          8 分片 × ${fmtNum(perShard)} IP × ${secPerIpValue.toFixed(2)} s
-          ${commonRounds > 1 ? '（需 ' + commonRounds + ' 轮自动续跑）' : ''}
-        </td>
-      </tr>
-    `);
+            futures = []
+            for port in PORTS:
+                all_done = True
+                for proto in PROTOCOLS:
+                    if '%s:%d:%s' % (ip, port, proto) not in existing:
+                        all_done = False
+                        break
+                if all_done:
+                    continue
+                futures.append((port, port_pool.submit(scan_fn, ip, port)))
 
-    if (surviveIPs > 0) {
-      rows.push(`
-        <tr>
-          <td class="stage-name">revalidate</td>
-          <td class="time-cell">${fmtTime(revalidateSec)}</td>
-          <td class="note">只扫有代理的 IP（约 ${fmtNum(proxyIPs)} 个，存活 IP 的 5%）</td>
-        </tr>
-      `);
-      rows.push(`
-        <tr>
-          <td class="stage-name">proxy</td>
-          <td class="time-cell ${proxySec > 3600 ? 'long' : ''}">${fmtTime(proxySec)}</td>
-          <td class="note">171 端口 + 读秀单验证（约 ${fmtNum(proxyIPs)} 个 IP）</td>
-        </tr>
-      `);
-    } else {
-      rows.push(`
-        <tr>
-          <td class="stage-name">revalidate / proxy</td>
-          <td class="time-cell">—</td>
-          <td class="note">存活 IP 为 0，跳过</td>
-        </tr>
-      `);
-    }
+            total_ports_for_ip = len(futures)
+            processed_ports_for_ip = 0
 
-    rows.push(`
-      <tr>
-        <td class="stage-name">merge + 调度</td>
-        <td class="time-cell">${fmtTime(OVERHEAD_SEC)}</td>
-        <td class="note">GitHub Actions 阶段切换开销（每轮续跑都算一次）</td>
-      </tr>
-    `);
+            for port, fut in futures:
+                if stop_flag[0]:
+                    return
+                try:
+                    is_open, r_list = fut.result()
+                except Exception:
+                    is_open, r_list = False, []
+                if is_open:
+                    ip_has_open = True
+                    ip_open_count += 1
+                if r_list:
+                    ip_has_proxy = True
+                    for item in r_list:
+                        ip_, port_, proto_ = item
+                        key = '%s:%d:%s' % (ip_, port_, proto_)
+                        with found_lock:
+                            if key in existing:
+                                continue
+                            existing.add(key)
+                            found_count[0] += 1
+                            ip_proxy_count += 1
+                            if note:
+                                line_out = '%s:%d@%s@%s' % (ip_, port_, proto_, note)
+                            else:
+                                line_out = '%s:%d@%s' % (ip_, port_, proto_)
+                            with open(OUTPUT_FILE, 'a', encoding='utf-8', newline='') as f:
+                                f.write(line_out + CRLF)
+                            log('[+] ' + line_out)
+                with found_lock:
+                    port_tasks[0] += 1
+                    processed_ports_for_ip += 1
+                    if current_phase == 'full' and processed_ports_for_ip % 5000 == 0:
+                        elapsed = time.time() - t0
+                        ppct = processed_ports_for_ip * 100.0 / total_ports_for_ip if total_ports_for_ip else 0
+                        log('[full] %s 端口 %d/%d (%.1f%%) | 开放 %d | 本片代理 %d | %.0f s'
+                            % (ip, processed_ports_for_ip, total_ports_for_ip,
+                               ppct, ip_open_count, found_count[0], elapsed))
+                if short_circuit and ip_has_open:
+                    break
 
-    tbody.innerHTML = rows.join('');
+            # ★ common 阶段发现存活 IP 后，顺手补扫 171 代理端口 + 4 协议验证
+            if current_phase == 'common' and ip_has_open:
+                for port in PROXY_PORTS:
+                    if stop_flag[0]:
+                        return
+                    try:
+                        _, r_list2 = scan_port_full(ip, port)
+                    except Exception:
+                        r_list2 = []
+                    if r_list2:
+                        ip_has_proxy = True
+                        for item in r_list2:
+                            ip_, port_, proto_ = item
+                            key = '%s:%d:%s' % (ip_, port_, proto_)
+                            with found_lock:
+                                if key in existing:
+                                    continue
+                                existing.add(key)
+                                found_count[0] += 1
+                                ip_proxy_count += 1
+                                if note:
+                                    line_out = '%s:%d@%s@%s' % (ip_, port_, proto_, note)
+                                else:
+                                    line_out = '%s:%d@%s' % (ip_, port_, proto_)
+                                with open(OUTPUT_FILE, 'a', encoding='utf-8', newline='') as f:
+                                    f.write(line_out + CRLF)
+                                log('[★] [common] 发现有效代理: ' + line_out)
 
-    document.getElementById('totalTime').textContent = fmtTime(totalSec);
+            if current_phase == 'common':
+                if ip_has_open:
+                    with open_ips_lock:
+                        open_ips.add(ip)
+                if ip_has_proxy:
+                    with open_ips_lock:
+                        proxy_ips.add(ip)
+            elif current_phase == 'revalidate':
+                if ip_has_open:
+                    with open_ips_lock:
+                        revalidated_ips.add(ip)
+            elif current_phase == 'proxy':
+                with open_ips_lock:
+                    if ip_has_proxy:
+                        proxy_found_ips.add(ip)
+                    else:
+                        proxy_missing_ips.add(ip)
 
-    let hint = '';
-    if (commonRounds > 1) {
-      hint = '⚠️ common 阶段超过 5.8 小时，需 ' + commonRounds + ' 轮自动续跑';
-    } else if (totalSec > 3600) {
-      hint = '✅ 一轮内跑完，全程自动';
-    } else {
-      hint = '✅ 快速完成，一轮即可';
-    }
-    document.getElementById('totalHint').textContent = hint;
+            with found_lock:
+                processed_ips[0] += 1
+                real_done = start_position + processed_ips[0]
+                pct = real_done * 100.0 / total_ips if total_ips else 0
+                if current_phase == 'full':
+                    elapsed = time.time() - t0
+                    speed = port_tasks[0] / elapsed if elapsed > 0 else 0
+                    log('[full] IP #%d %s 扫完 | 本 IP: 端口开放 %d, 代理 %d | 全局 %d/%d (%.2f%%) | 累计代理 %d | %.1f task/s | %.0f s'
+                        % (real_done, ip, ip_open_count, ip_proxy_count,
+                           real_done, total_ips, pct,
+                           found_count[0], speed, elapsed))
+                elif processed_ips[0] % 200 == 0:
+                    elapsed = time.time() - t0
+                    speed = port_tasks[0] / elapsed if elapsed > 0 else 0
+                    with open_ips_lock:
+                        oc = len(open_ips)
+                        pc = len(proxy_ips)
+                        rc = len(revalidated_ips)
+                        pf = len(proxy_found_ips)
+                        pm = len(proxy_missing_ips)
+                    if current_phase == 'common':
+                        extra = '存活 %d | 代理IP %d' % (oc, pc)
+                    elif current_phase == 'revalidate':
+                        extra = '重验存活 %d' % rc
+                    elif current_phase == 'proxy':
+                        extra = '找到 %d | 待深扫 %d' % (pf, pm)
+                    else:
+                        extra = ''
+                    log('[进度] 已处理 %d/%d IP | 全局 %.2f%% | %s | %.1f task/s | %.0f s'
+                        % (real_done, total_ips, pct, extra, speed, elapsed))
 
-    // footer 参数
-    document.getElementById('footerParams').textContent =
-      '参数：' + tcpWorkers + ' × ' + portWorkers + ' = ' + concurrency +
-      ' 并发 · TCP_TIMEOUT = ' + tcpTimeout + 's · 约 ' + secPerIpValue.toFixed(2) + ' 秒/IP';
+            if IP_COOLDOWN > 0:
+                time.sleep(IP_COOLDOWN)
 
-    document.getElementById('results').classList.add('show');
-  }
+    def watchdog():
+        while not stop_flag[0]:
+            if time.time() - t0 > MAX_RUNTIME_SEC:
+                log('[!] 达到最大运行时长，优雅停止')
+                stop_flag[0] = True
+                return
+            time.sleep(5)
 
-  function escapeHtml(s) {
-    const d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
-  }
+    threading.Thread(target=watchdog, daemon=True).start()
 
-  function applyPreset(tw, pw, timeout) {
-    document.getElementById('tcpWorkersInput').value = tw;
-    document.getElementById('portWorkersInput').value = pw;
-    document.getElementById('tcpTimeoutInput').value = timeout;
-    calculate();
-  }
+    try:
+        with ThreadPoolExecutor(max_workers=TCP_WORKERS) as ip_pool:
+            futures = [ip_pool.submit(worker) for _ in range(TCP_WORKERS)]
+            for fut in as_completed(futures):
+                try:
+                    fut.result()
+                except Exception as ex:
+                    log('[!] worker 异常: %s' % ex)
+    finally:
+        stop_flag[0] = True
+        port_pool.shutdown(wait=False)
 
-  function loadExample() {
-    document.getElementById('input').value =
-`[36]	183.172.0.0 - 183.172.255.255 | 中国 北京 北京 清华大学教育网 教育网 CN AS
-[37]	183.173.0.0 - 183.173.127.255 | 中国 北京 北京 清华大学教育网 教育网 CN AS
-[38]	183.173.128.0 - 183.173.159.255 | 中国 北京 北京 清华大学教育网 教育网 CN AS`;
-    document.getElementById('surviveInput').value = '515';
-    calculate();
-  }
+    with pos_lock:
+        state['position'] = current_pos[0]
+    state['done'] = state.get('done', 0) + port_tasks[0]
 
-  function clearAll() {
-    document.getElementById('input').value = '';
-    document.getElementById('surviveInput').value = '0';
-    document.getElementById('results').classList.remove('show');
-    document.getElementById('errorBox').classList.remove('show');
-  }
+    if state['position'] >= total_ips:
+        state['completed'] = True
+        state['completed_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        log('=' * 60)
+        log('[分片 %d/%d, 阶段 %s] 本阶段本片扫描完成！'
+            % (SHARD_INDEX, SHARD_TOTAL, current_phase))
+    else:
+        log('=' * 60)
+        log('[分片 %d/%d, 阶段 %s] 本次 session 结束，剩余 %d 个 IP'
+            % (SHARD_INDEX, SHARD_TOTAL, current_phase,
+               total_ips - state['position']))
 
-  // 实时计算
-  const inputs = ['input', 'tcpWorkersInput', 'portWorkersInput', 'tcpTimeoutInput', 'surviveInput'];
-  inputs.forEach(id => {
-    const el = document.getElementById(id);
-    el.addEventListener('input', () => {
-      if (document.getElementById('input').value.trim()) {
-        calculate();
-      } else {
-        document.getElementById('results').classList.remove('show');
-      }
-    });
-  });
+    if current_phase == 'common' and open_ips:
+        try:
+            existing_open = load_ip_set(OPEN_IPS_FILE)
+            existing_open.update(open_ips)
+            with open(OPEN_IPS_FILE, 'w', encoding='utf-8', newline='') as f:
+                for ip in sorted(existing_open):
+                    f.write(ip + CRLF)
+            log('本 session 存活 IP: %d 个' % len(open_ips))
+            log('存活 IP 列表已更新: %s (本 session %d, 累计 %d)'
+                % (OPEN_IPS_FILE, len(open_ips), len(existing_open)))
+        except Exception as e:
+            log('[!] 写存活 IP 文件失败: %s' % e)
 
-  window.addEventListener('DOMContentLoaded', () => {
-    loadExample();
-    calculate();
-  });
-</script>
-</body>
-</html>
+        try:
+            existing_proxy_ips = load_ip_set(PROXY_IPS_FILE)
+            existing_proxy_ips.update(proxy_ips)
+            with open(PROXY_IPS_FILE, 'w', encoding='utf-8', newline='') as f:
+                for ip in sorted(existing_proxy_ips):
+                    f.write(ip + CRLF)
+            log('本 session 有代理的 IP: %d 个' % len(proxy_ips))
+            log('代理 IP 列表已更新: %s (本 session %d, 累计 %d)'
+                % (PROXY_IPS_FILE, len(proxy_ips), len(existing_proxy_ips)))
+        except Exception as e:
+            log('[!] 写代理 IP 文件失败: %s' % e)
+
+    elif current_phase == 'revalidate' and revalidated_ips:
+        try:
+            existing_rev = load_ip_set(OPEN_IPS_REVALIDATED_FILE)
+            existing_rev.update(revalidated_ips)
+            with open(OPEN_IPS_REVALIDATED_FILE, 'w', encoding='utf-8', newline='') as f:
+                for ip in sorted(existing_rev):
+                    f.write(ip + CRLF)
+            log('本 session 重验存活 IP: %d 个' % len(revalidated_ips))
+            log('重验存活列表已更新: %s (本 session %d, 累计 %d)'
+                % (OPEN_IPS_REVALIDATED_FILE, len(revalidated_ips), len(existing_rev)))
+        except Exception as e:
+            log('[!] 写重验存活文件失败: %s' % e)
+
+    elif current_phase == 'proxy' and proxy_missing_ips:
+        try:
+            existing_missing = load_ip_set(PROXY_MISSING_FILE)
+            existing_missing.update(proxy_missing_ips)
+            with open(PROXY_MISSING_FILE, 'w', encoding='utf-8', newline='') as f:
+                for ip in sorted(existing_missing):
+                    f.write(ip + CRLF)
+            log('本 session 找到代理的 IP: %d 个' % len(proxy_found_ips))
+            log('本 session 待深扫 IP: %d 个' % len(proxy_missing_ips))
+            log('待深扫列表已更新: %s (本 session %d, 累计 %d)'
+                % (PROXY_MISSING_FILE, len(proxy_missing_ips), len(existing_missing)))
+        except Exception as e:
+            log('[!] 写待深扫文件失败: %s' % e)
+
+    save_json(STATE_FILE, state)
+
+    dt = time.time() - t0
+    log('-' * 60)
+    log('本 session 耗时: %.1f 秒 (%.2f 小时)' % (dt, dt / 3600.0))
+    log('累计找到代理: %d' % found_count[0])
+    log('本片进度: %d/%d (%.1f%%)'
+        % (state['position'], total_ips,
+           state['position'] * 100.0 / total_ips if total_ips else 0))
+
+
+if __name__ == '__main__':
+    main()
