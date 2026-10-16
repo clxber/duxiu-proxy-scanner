@@ -427,13 +427,11 @@ def main():
         log('=' * 60)
         log('一轮完整结束，生成存活 IP 段统计 + 清理分片文件...')
 
-        # ★ 先生成存活 IP 段统计（需要分片文件）
         try:
             build_alive_ip_ranges()
         except Exception as e:
             log('[!] 生成 %s 失败: %s' % (ALIVE_IP_RANGES_FILE, e))
 
-        # 再清理分片文件
         cleanup_shard_files()
 
         current_count = count_file_lines(OUTPUT_FILE)
