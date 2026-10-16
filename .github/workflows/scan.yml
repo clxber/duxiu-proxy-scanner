@@ -30,7 +30,10 @@ jobs:
       - name: 运行扫描 分片0
         env:
           MAX_RUNTIME_SEC: '20880'
-        run: python scanner.py --shard 0 --shard-total 8
+        run: |
+          ulimit -n 65536
+          echo "ulimit -n = $(ulimit -n)"
+          python scanner.py --shard 0 --shard-total 8
       - name: 上传本分片 Artifact（第一优先级，先保住数据）
         if: always()
         uses: actions/upload-artifact@v7
@@ -85,7 +88,10 @@ jobs:
       - name: 运行扫描 分片1
         env:
           MAX_RUNTIME_SEC: '20880'
-        run: python scanner.py --shard 1 --shard-total 8
+        run: |
+          ulimit -n 65536
+          echo "ulimit -n = $(ulimit -n)"
+          python scanner.py --shard 1 --shard-total 8
       - name: 上传本分片 Artifact（第一优先级，先保住数据）
         if: always()
         uses: actions/upload-artifact@v7
@@ -140,7 +146,10 @@ jobs:
       - name: 运行扫描 分片2
         env:
           MAX_RUNTIME_SEC: '20880'
-        run: python scanner.py --shard 2 --shard-total 8
+        run: |
+          ulimit -n 65536
+          echo "ulimit -n = $(ulimit -n)"
+          python scanner.py --shard 2 --shard-total 8
       - name: 上传本分片 Artifact（第一优先级，先保住数据）
         if: always()
         uses: actions/upload-artifact@v7
@@ -195,7 +204,10 @@ jobs:
       - name: 运行扫描 分片3
         env:
           MAX_RUNTIME_SEC: '20880'
-        run: python scanner.py --shard 3 --shard-total 8
+        run: |
+          ulimit -n 65536
+          echo "ulimit -n = $(ulimit -n)"
+          python scanner.py --shard 3 --shard-total 8
       - name: 上传本分片 Artifact（第一优先级，先保住数据）
         if: always()
         uses: actions/upload-artifact@v7
@@ -250,7 +262,10 @@ jobs:
       - name: 运行扫描 分片4
         env:
           MAX_RUNTIME_SEC: '20880'
-        run: python scanner.py --shard 4 --shard-total 8
+        run: |
+          ulimit -n 65536
+          echo "ulimit -n = $(ulimit -n)"
+          python scanner.py --shard 4 --shard-total 8
       - name: 上传本分片 Artifact（第一优先级，先保住数据）
         if: always()
         uses: actions/upload-artifact@v7
@@ -305,7 +320,10 @@ jobs:
       - name: 运行扫描 分片5
         env:
           MAX_RUNTIME_SEC: '20880'
-        run: python scanner.py --shard 5 --shard-total 8
+        run: |
+          ulimit -n 65536
+          echo "ulimit -n = $(ulimit -n)"
+          python scanner.py --shard 5 --shard-total 8
       - name: 上传本分片 Artifact（第一优先级，先保住数据）
         if: always()
         uses: actions/upload-artifact@v7
@@ -360,7 +378,10 @@ jobs:
       - name: 运行扫描 分片6
         env:
           MAX_RUNTIME_SEC: '20880'
-        run: python scanner.py --shard 6 --shard-total 8
+        run: |
+          ulimit -n 65536
+          echo "ulimit -n = $(ulimit -n)"
+          python scanner.py --shard 6 --shard-total 8
       - name: 上传本分片 Artifact（第一优先级，先保住数据）
         if: always()
         uses: actions/upload-artifact@v7
@@ -415,7 +436,10 @@ jobs:
       - name: 运行扫描 分片7
         env:
           MAX_RUNTIME_SEC: '20880'
-        run: python scanner.py --shard 7 --shard-total 8
+        run: |
+          ulimit -n 65536
+          echo "ulimit -n = $(ulimit -n)"
+          python scanner.py --shard 7 --shard-total 8
       - name: 上传本分片 Artifact（第一优先级，先保住数据）
         if: always()
         uses: actions/upload-artifact@v7
