@@ -95,8 +95,8 @@ TCP_TIMEOUT = 1.5
 VERIFY_TIMEOUT = 30
 VERIFY_RETRY = 0
 VERIFY_DELAY = 0.0
-TCP_WORKERS = 25
-PORT_WORKERS = 15
+TCP_WORKERS = 40
+PORT_WORKERS = 20
 IP_COOLDOWN = 0.5
 VERIFY_RATE_LIMIT = 1
 
@@ -722,7 +722,7 @@ def main():
 
     open_ips_lock = threading.Lock()
     open_ips = set()
-    proxy_ips = set()          # ★ 新增：有代理的 IP
+    proxy_ips = set()
     revalidated_ips = set()
     proxy_found_ips = set()
     proxy_missing_ips = set()
@@ -842,7 +842,6 @@ def main():
                 if ip_has_open:
                     with open_ips_lock:
                         open_ips.add(ip)
-                # ★ 新增：有代理的 IP 单独记录
                 if ip_has_proxy:
                     with open_ips_lock:
                         proxy_ips.add(ip)
@@ -942,7 +941,6 @@ def main():
         except Exception as e:
             log('[!] 写存活 IP 文件失败: %s' % e)
 
-        # ★ 新增：写"有代理的 IP"文件
         try:
             existing_proxy_ips = load_ip_set(PROXY_IPS_FILE)
             existing_proxy_ips.update(proxy_ips)
