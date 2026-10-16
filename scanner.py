@@ -89,7 +89,7 @@ args, _ = parser.parse_known_args()
 SHARD_INDEX = args.shard
 SHARD_TOTAL = args.shard_total
 
-TCP_TIMEOUT = 3
+TCP_TIMEOUT = 1.5
 VERIFY_TIMEOUT = 30
 VERIFY_RETRY = 0
 VERIFY_DELAY = 0.0
@@ -690,7 +690,7 @@ def main():
         log('  前 12 探针: %s' % PROBE_PORTS_12)
     log('本次起点: IP #%d' % state['position'])
     log('已找到代理: %d' % len(existing))
-    log('搜索连接超时: %d s | 验证超时: %d s' % (TCP_TIMEOUT, VERIFY_TIMEOUT))
+    log('搜索连接超时: %s s | 验证超时: %d s' % (TCP_TIMEOUT, VERIFY_TIMEOUT))
     log('IP 并发: %d  ×  端口并发: %d  =  全局最大 %d 条连接'
         % (TCP_WORKERS, PORT_WORKERS, TCP_WORKERS * PORT_WORKERS))
     log('验证方式: curl (%s)' % CURL)
