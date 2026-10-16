@@ -3,7 +3,9 @@
 高校代理扫描器 —— 五阶段 + 分片 + 断点续跑
 阶段 1 verify_existing：验证已有代理（只有分片 0 干活）
 阶段 2 common         ：12 探针 + 171 代理（TCP 探活，IP 级短路）+ 顺便代理验证
-阶段 3 revalidate     ：12 探针 + 171 代理（重新探活，IP 级短路）
+                        → 输出 open_ips_shardN.txt（所有存活 IP）
+                        → 输出 proxy_ips_shardN.txt（有代理的 IP，供 revalidate 用）
+阶段 3 revalidate     ：对 proxy_ips_shardN.txt（有代理的 IP）二次探活
 阶段 4 proxy          ：171 代理端口（完整扫描 + 单验证，4 协议全试）
 阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
 验证：curl 通过代理访问 https://www.duxiu.com/，命中「读秀学术搜索」才算有效代理
@@ -106,12 +108,14 @@ if SHARD_TOTAL > 1:
     STATE_FILE = 'progress_shard%d.json' % SHARD_INDEX
     OUTPUT_FILE = 'working_proxies_shard%d.txt' % SHARD_INDEX
     OPEN_IPS_FILE = 'open_ips_shard%d.txt' % SHARD_INDEX
+    PROXY_IPS_FILE = 'proxy_ips_shard%d.txt' % SHARD_INDEX
     OPEN_IPS_REVALIDATED_FILE = 'open_ips_revalidated_shard%d.txt' % SHARD_INDEX
     PROXY_MISSING_FILE = 'proxy_missing_shard%d.txt' % SHARD_INDEX
 else:
     STATE_FILE = 'progress.json'
     OUTPUT_FILE = 'working_proxies.txt'
     OPEN_IPS_FILE = 'open_ips.txt'
+    PROXY_IPS_FILE = 'proxy_ips.txt'
     OPEN_IPS_REVALIDATED_FILE = 'open_ips_revalidated.txt'
     PROXY_MISSING_FILE = 'proxy_missing.txt'
 
@@ -458,7 +462,8 @@ def get_phase_config(phase):
     if phase == 'common':
         return COMMON_PORTS, None, OPEN_IPS_FILE
     elif phase == 'revalidate':
-        return COMMON_PORTS, OPEN_IPS_FILE, OPEN_IPS_REVALIDATED_FILE
+        # ★ 上游改成"有代理的 IP"
+        return COMMON_PORTS, PROXY_IPS_FILE, OPEN_IPS_REVALIDATED_FILE
     elif phase == 'proxy':
         return PROXY_PORTS, OPEN_IPS_REVALIDATED_FILE, PROXY_MISSING_FILE
     elif phase == 'full':
@@ -717,6 +722,7 @@ def main():
 
     open_ips_lock = threading.Lock()
     open_ips = set()
+    proxy_ips = set()          # ★ 新增：有代理的 IP
     revalidated_ips = set()
     proxy_found_ips = set()
     proxy_missing_ips = set()
@@ -836,6 +842,10 @@ def main():
                 if ip_has_open:
                     with open_ips_lock:
                         open_ips.add(ip)
+                # ★ 新增：有代理的 IP 单独记录
+                if ip_has_proxy:
+                    with open_ips_lock:
+                        proxy_ips.add(ip)
             elif current_phase == 'revalidate':
                 if ip_has_open:
                     with open_ips_lock:
@@ -863,11 +873,12 @@ def main():
                     speed = port_tasks[0] / elapsed if elapsed > 0 else 0
                     with open_ips_lock:
                         oc = len(open_ips)
+                        pc = len(proxy_ips)
                         rc = len(revalidated_ips)
                         pf = len(proxy_found_ips)
                         pm = len(proxy_missing_ips)
                     if current_phase == 'common':
-                        extra = '存活 %d' % oc
+                        extra = '存活 %d | 代理IP %d' % (oc, pc)
                     elif current_phase == 'revalidate':
                         extra = '重验存活 %d' % rc
                     elif current_phase == 'proxy':
@@ -930,6 +941,19 @@ def main():
                 % (OPEN_IPS_FILE, len(open_ips), len(existing_open)))
         except Exception as e:
             log('[!] 写存活 IP 文件失败: %s' % e)
+
+        # ★ 新增：写"有代理的 IP"文件
+        try:
+            existing_proxy_ips = load_ip_set(PROXY_IPS_FILE)
+            existing_proxy_ips.update(proxy_ips)
+            with open(PROXY_IPS_FILE, 'w', encoding='utf-8', newline='') as f:
+                for ip in sorted(existing_proxy_ips):
+                    f.write(ip + CRLF)
+            log('本 session 有代理的 IP: %d 个' % len(proxy_ips))
+            log('代理 IP 列表已更新: %s (本 session %d, 累计 %d)'
+                % (PROXY_IPS_FILE, len(proxy_ips), len(existing_proxy_ips)))
+        except Exception as e:
+            log('[!] 写代理 IP 文件失败: %s' % e)
 
     elif current_phase == 'revalidate' and revalidated_ips:
         try:
