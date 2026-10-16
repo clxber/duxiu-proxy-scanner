@@ -1,15 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 高校代理扫描器 —— 五阶段 + 分片 + 断点续跑
-阶段 1 verify_existing：验证已有代理（只有分片 0 干活）
-阶段 2 common         ：12 探针 + 171 代理（TCP 探活，IP 级短路）+ 顺便代理验证
-                        → 输出 open_ips_shardN.txt（所有存活 IP）
-                        → 输出 proxy_ips_shardN.txt（有代理的 IP，供 revalidate 用）
-阶段 3 revalidate     ：对 proxy_ips_shardN.txt（有代理的 IP）二次探活
-阶段 4 proxy          ：171 代理端口（完整扫描 + 单验证，4 协议全试）
-阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
-验证：curl 通过代理访问 https://www.duxiu.com/，命中「读秀学术搜索」才算有效代理
-代理协议：http / https / socks5 / socks4（4 协议统一测读秀 https）
+★ 双层验证：读秀（探活层）+ 百度（验证层）
+  顺序：读秀失败立即淘汰，不进百度；读秀通过 → 百度确认
 """
 
 import os
@@ -31,12 +24,21 @@ UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 CONNECT_TIMEOUT = 5
 MAX_TIME = 15
 
+# ★ 读秀（探活层）在前 → 百度（验证层）在后
+# verify_proxy 顺序遍历，读秀失败立即返回，不会白跑百度
 VERIFY_TARGETS = [
     {
         'name': 'duxiu',
         'urls': ['https://www.duxiu.com/'],
         'keywords': ['读秀学术搜索'],
         'exclude': ['系统登录', '用户名', '密 码', '请完成安全验证'],
+        'protocols': ['http', 'https', 'socks5', 'socks4'],
+    },
+    {
+        'name': 'baidu',
+        'urls': ['https://www.baidu.com/'],
+        'keywords': ['百度一下'],
+        'exclude': ['请输入验证码', '网络不给力', '很抱歉', '安全验证', '系统繁忙'],
         'protocols': ['http', 'https', 'socks5', 'socks4'],
     },
 ]
@@ -203,7 +205,6 @@ def ip_int_to_str(ip_int):
 
 
 def load_existing_proxies(path):
-    """返回 set，key 是 'ip:port:proto'"""
     s = set()
     if not os.path.exists(path):
         return s
@@ -399,8 +400,9 @@ def _verify_one_target(ip, port, protocol, target):
 
 def verify_proxy(ip, port, protocol):
     """
-    单验证：curl 通过代理访问 https://www.duxiu.com/，命中「读秀学术搜索」即通过。
-    4 协议统一测这一个目标。
+    ★ 双层验证：顺序遍历 VERIFY_TARGETS
+    读秀（探活层）失败 → 立即返回 False，不进百度
+    读秀通过 → 百度（验证层）确认，两个都过才算通过
     """
     for target in VERIFY_TARGETS:
         if protocol not in target.get('protocols', []):
@@ -415,7 +417,6 @@ def scan_port_common(ip, port):
 
 
 def scan_port_full(ip, port):
-    """返回 (is_open, [(ip, port, proto), ...])，所有支持的协议"""
     if not tcp_check(ip, port):
         return False, []
     working = []
@@ -462,7 +463,6 @@ def get_phase_config(phase):
     if phase == 'common':
         return COMMON_PORTS, None, OPEN_IPS_FILE
     elif phase == 'revalidate':
-        # ★ 上游改成"有代理的 IP"
         return COMMON_PORTS, PROXY_IPS_FILE, OPEN_IPS_REVALIDATED_FILE
     elif phase == 'proxy':
         return PROXY_PORTS, OPEN_IPS_REVALIDATED_FILE, PROXY_MISSING_FILE
@@ -506,7 +506,7 @@ def run_verify_existing_phase():
     with open(OUTPUT_FILE, 'w', encoding='utf-8', newline='') as f:
         f.write('@ 代理扫描结果 [verify_existing]' + CRLF)
         f.write('@ 开始时间: %s' % time.strftime('%Y-%m-%d %H:%M:%S') + CRLF)
-        f.write('@ 验证: 读秀 https（单验证）' + CRLF)
+        f.write('@ 验证: 读秀 + 百度（双层）' + CRLF)
         f.write('@' + '-' * 58 + CRLF)
 
     if not proxy_list:
@@ -663,13 +663,12 @@ def main():
             f.write('@ 代理扫描结果 [分片 %d/%d, 阶段 %s]'
                     % (SHARD_INDEX, SHARD_TOTAL, current_phase) + CRLF)
             f.write('@ 开始时间: %s' % state['started_at'] + CRLF)
-            f.write('@ 验证: 读秀 https（单验证）' + CRLF)
+            f.write('@ 验证: 读秀 + 百度（双层）' + CRLF)
             f.write('@' + '-' * 58 + CRLF)
         existing = set()
         log('=== 新一轮扫描 [分片 %d/%d, phase=%s] ==='
             % (SHARD_INDEX, SHARD_TOTAL, current_phase))
 
-        # ★ 清空上一轮的 alive_ip_ranges.txt（仅分片 0 做）
         if SHARD_INDEX == 0:
             try:
                 if os.path.exists(ALIVE_IP_RANGES_FILE):
@@ -703,7 +702,7 @@ def main():
         log('  验证目标 [%s]: %s | 适用协议: %s | 关键词: %s | 排除: %s'
             % (t['name'], t['urls'], t.get('protocols', ['?']),
                t['keywords'], t.get('exclude', [])))
-    log('成功判定: 命中读秀页面（单验证）')
+    log('成功判定: 读秀 + 百度 都通过（双层，读秀在前）')
     log('验证协议: %s（不短路，全试）' % (', '.join(PROTOCOLS)))
     log('curl 超时: 连接 %d s / 总 %d s' % (CONNECT_TIMEOUT, MAX_TIME))
     log('全局限速: %d 次/秒' % VERIFY_RATE_LIMIT if VERIFY_RATE_LIMIT > 0 else '不限速')
@@ -810,7 +809,6 @@ def main():
                 if short_circuit and ip_has_open:
                     break
 
-            # ★ common 阶段发现存活 IP 后，顺手补扫 171 代理端口 + 4 协议验证
             if current_phase == 'common' and ip_has_open:
                 for port in PROXY_PORTS:
                     if stop_flag[0]:
