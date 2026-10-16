@@ -2,7 +2,7 @@
 """
 高校代理扫描器 —— 五阶段 + 分片 + 断点续跑
 阶段 1 verify_existing：验证已有代理（只有分片 0 干活）
-阶段 2 common         ：12 探针 + 171 代理（TCP 探活，IP 级短路）
+阶段 2 common         ：12 探针 + 171 代理（TCP 探活，IP 级短路）+ 顺便代理验证
 阶段 3 revalidate     ：12 探针 + 171 代理（重新探活，IP 级短路）
 阶段 4 proxy          ：171 代理端口（完整扫描 + 单验证，4 协议全试）
 阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
@@ -795,7 +795,6 @@ def main():
                 with found_lock:
                     port_tasks[0] += 1
                     processed_ports_for_ip += 1
-                    # full 阶段：每 5000 端口打印一次细粒度进度
                     if current_phase == 'full' and processed_ports_for_ip % 5000 == 0:
                         elapsed = time.time() - t0
                         ppct = processed_ports_for_ip * 100.0 / total_ports_for_ip if total_ports_for_ip else 0
@@ -804,6 +803,34 @@ def main():
                                ppct, ip_open_count, found_count[0], elapsed))
                 if short_circuit and ip_has_open:
                     break
+
+            # ★ common 阶段发现存活 IP 后，顺手补扫 171 代理端口 + 4 协议验证
+            if current_phase == 'common' and ip_has_open:
+                for port in PROXY_PORTS:
+                    if stop_flag[0]:
+                        return
+                    try:
+                        _, r_list2 = scan_port_full(ip, port)
+                    except Exception:
+                        r_list2 = []
+                    if r_list2:
+                        ip_has_proxy = True
+                        for item in r_list2:
+                            ip_, port_, proto_ = item
+                            key = '%s:%d:%s' % (ip_, port_, proto_)
+                            with found_lock:
+                                if key in existing:
+                                    continue
+                                existing.add(key)
+                                found_count[0] += 1
+                                ip_proxy_count += 1
+                                if note:
+                                    line_out = '%s:%d@%s@%s' % (ip_, port_, proto_, note)
+                                else:
+                                    line_out = '%s:%d@%s' % (ip_, port_, proto_)
+                                with open(OUTPUT_FILE, 'a', encoding='utf-8', newline='') as f:
+                                    f.write(line_out + CRLF)
+                                log('[★] [common] 发现有效代理: ' + line_out)
 
             if current_phase == 'common':
                 if ip_has_open:
@@ -825,7 +852,6 @@ def main():
                 real_done = start_position + processed_ips[0]
                 pct = real_done * 100.0 / total_ips if total_ips else 0
                 if current_phase == 'full':
-                    # full 阶段：每个 IP 完成都打印汇总
                     elapsed = time.time() - t0
                     speed = port_tasks[0] / elapsed if elapsed > 0 else 0
                     log('[full] IP #%d %s 扫完 | 本 IP: 端口开放 %d, 代理 %d | 全局 %d/%d (%.2f%%) | 累计代理 %d | %.1f task/s | %.0f s'
