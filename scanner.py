@@ -1,8 +1,15 @@
 # -*- coding: utf-8 -*-
 """
 高校代理扫描器 —— 五阶段 + 分片 + 断点续跑
-★ 双层验证：读秀（探活层）+ 百度（验证层）
-  顺序：读秀失败立即淘汰，不进百度；读秀通过 → 百度确认
+阶段 1 verify_existing：验证已有代理（只有分片 0 干活）
+阶段 2 common         ：12 探针 + 171 代理（TCP 探活，IP 级短路）+ 顺便代理验证
+                        → 输出 open_ips_shardN.txt（所有存活 IP）
+                        → 输出 proxy_ips_shardN.txt（有代理的 IP，供 revalidate 用）
+阶段 3 revalidate     ：对 proxy_ips_shardN.txt（有代理的 IP）二次探活
+阶段 4 proxy          ：171 代理端口（完整扫描 + 单验证，4 协议全试）
+阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
+验证：双层 —— 读秀（探活层）+ 百度（验证层），两者都通过才算有效代理
+代理协议：http / https / socks5 / socks4（4 协议统一测读秀 + 百度 https）
 """
 
 import os
