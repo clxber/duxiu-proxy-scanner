@@ -1,0 +1,12 @@
+{
+  "position": 53,
+  "done": 53,
+  "total_ips": 53,
+  "phase": "verify_existing",
+  "shard_index": 0,
+  "shard_total": 8,
+  "started_at": "2026-10-17 14:00:29",
+  "completed": true,
+  "completed_at": "2026-10-17 14:00:29",
+  "session": 1
+}
