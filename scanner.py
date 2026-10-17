@@ -10,8 +10,8 @@
 阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
 验证：单验证 —— 读秀（https://www.duxiu.com/），命中「读秀学术搜索」才算有效代理
 代理协议：http / socks5 / socks4（已去掉 https）
-★ 极限压榨版：TCP_TIMEOUT=1.0，CONNECT_TIMEOUT=15，MAX_TIME=30
-★ 极限并发：60×25 = 1500 并发
+★ 宇宙极限版：TCP_TIMEOUT=1.0，CONNECT_TIMEOUT=15，MAX_TIME=30
+★ 极限并发：80×25 = 2000 并发
 ★ 彻底取消验证限速（VERIFY_RATE_LIMIT=0），且内嵌验证并发，解决串行卡 35 分钟的问题
 """
 
@@ -105,8 +105,8 @@ TCP_TIMEOUT = 1.0
 VERIFY_TIMEOUT = 30
 VERIFY_RETRY = 0
 VERIFY_DELAY = 0.0
-# ★ 极限并发 60×25 = 1500
-TCP_WORKERS = 60
+# ★ 宇宙极限并发 80×25 = 2000
+TCP_WORKERS = 80
 PORT_WORKERS = 25
 IP_COOLDOWN = 0.5
 
@@ -716,7 +716,13 @@ def main():
     log('成功判定: 命中读秀页面（单验证）')
     log('验证协议: %s（不短路，全试）' % (', '.join(PROTOCOLS)))
     log('curl 超时: 连接 %d s / 总 %d s' % (CONNECT_TIMEOUT, MAX_TIME))
-    log('全局限速: %d 次/秒' % VERIFY_RATE_LIMIT if VERIFY_RATE_LIMIT > 0 else '不限速')
+    
+    # ★ 限速日志详细化
+    if VERIFY_RATE_LIMIT > 0:
+        log('全局限速: %d 次/秒（全局串行排队控制）' % VERIFY_RATE_LIMIT)
+    else:
+        log('全局限速: 无限制（完全依据发现速度瞬间并发，不排队）')
+
     log('最大运行时长: %d 秒 (%.2f 小时)'
         % (MAX_RUNTIME_SEC, MAX_RUNTIME_SEC / 3600.0))
     log('-' * 60)
