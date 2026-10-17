@@ -2,14 +2,14 @@
 """
 高校代理扫描器 —— 五阶段 + 分片 + 断点续跑
 阶段 1 verify_existing：验证已有代理（只有分片 0 干活）
-阶段 2 common         ：12 探针 + 171 代理（TCP 探活，IP 级短路）+ 顺便代理验证
+阶段 2 common         ：12 探针 + 174 代理（TCP 探活，IP 级短路）+ 顺便代理验证
                         → 输出 open_ips_shardN.txt（所有存活 IP）
                         → 输出 proxy_ips_shardN.txt（有代理的 IP，供 revalidate 用）
 阶段 3 revalidate     ：对 proxy_ips_shardN.txt（有代理的 IP）二次探活
-阶段 4 proxy          ：171 代理端口（完整扫描 + 单验证，4 协议全试）
+阶段 4 proxy          ：174 代理端口（完整扫描 + 单验证，4 协议全试）
 阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
-验证：双层 —— 读秀（探活层）+ 百度（验证层），两者都通过才算有效代理
-代理协议：http / https / socks5 / socks4（4 协议统一测读秀 + 百度 https）
+验证：单验证 —— 读秀（https://www.duxiu.com/），命中「读秀学术搜索」才算有效代理
+代理协议：http / https / socks5 / socks4（4 协议统一测读秀 https）
 """
 
 import os
@@ -31,21 +31,13 @@ UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 CONNECT_TIMEOUT = 5
 MAX_TIME = 15
 
-# ★ 读秀（探活层）在前 → 百度（验证层）在后
-# verify_proxy 顺序遍历，读秀失败立即返回，不会白跑百度
+# ★ 单验证：只测读秀
 VERIFY_TARGETS = [
     {
         'name': 'duxiu',
         'urls': ['https://www.duxiu.com/'],
         'keywords': ['读秀学术搜索'],
         'exclude': ['系统登录', '用户名', '密 码', '请完成安全验证'],
-        'protocols': ['http', 'https', 'socks5', 'socks4'],
-    },
-    {
-        'name': 'baidu',
-        'urls': ['https://www.baidu.com/'],
-        'keywords': ['百度一下'],
-        'exclude': ['请输入验证码', '网络不给力', '很抱歉', '安全验证', '系统繁忙'],
         'protocols': ['http', 'https', 'socks5', 'socks4'],
     },
 ]
@@ -64,6 +56,8 @@ def _build_proxy_ports():
         (10000, 10010), (10080, 10086), (3128, 3130), (8388, 8389),
         (8443, 8444), (2052, 2096), (51820, 51830), (1194, 1199),
         (9050, 9051), (9150, 9151),
+        # ★ 根据用户提供的真实代理列表，新增缺失的独立端口
+        (15732, 15732), (26001, 26001), (29290, 29290),
     ]
     s = set()
     for a, b in groups:
@@ -407,9 +401,7 @@ def _verify_one_target(ip, port, protocol, target):
 
 def verify_proxy(ip, port, protocol):
     """
-    ★ 双层验证：顺序遍历 VERIFY_TARGETS
-    读秀（探活层）失败 → 立即返回 False，不进百度
-    读秀通过 → 百度（验证层）确认，两个都过才算通过
+    ★ 单验证：读秀
     """
     for target in VERIFY_TARGETS:
         if protocol not in target.get('protocols', []):
@@ -513,7 +505,7 @@ def run_verify_existing_phase():
     with open(OUTPUT_FILE, 'w', encoding='utf-8', newline='') as f:
         f.write('@ 代理扫描结果 [verify_existing]' + CRLF)
         f.write('@ 开始时间: %s' % time.strftime('%Y-%m-%d %H:%M:%S') + CRLF)
-        f.write('@ 验证: 读秀 + 百度（双层）' + CRLF)
+        f.write('@ 验证: 读秀 https（单验证）' + CRLF)
         f.write('@' + '-' * 58 + CRLF)
 
     if not proxy_list:
@@ -670,7 +662,7 @@ def main():
             f.write('@ 代理扫描结果 [分片 %d/%d, 阶段 %s]'
                     % (SHARD_INDEX, SHARD_TOTAL, current_phase) + CRLF)
             f.write('@ 开始时间: %s' % state['started_at'] + CRLF)
-            f.write('@ 验证: 读秀 + 百度（双层）' + CRLF)
+            f.write('@ 验证: 读秀 https（单验证）' + CRLF)
             f.write('@' + '-' * 58 + CRLF)
         existing = set()
         log('=== 新一轮扫描 [分片 %d/%d, phase=%s] ==='
@@ -709,7 +701,7 @@ def main():
         log('  验证目标 [%s]: %s | 适用协议: %s | 关键词: %s | 排除: %s'
             % (t['name'], t['urls'], t.get('protocols', ['?']),
                t['keywords'], t.get('exclude', [])))
-    log('成功判定: 读秀 + 百度 都通过（双层，读秀在前）')
+    log('成功判定: 命中读秀页面（单验证）')
     log('验证协议: %s（不短路，全试）' % (', '.join(PROTOCOLS)))
     log('curl 超时: 连接 %d s / 总 %d s' % (CONNECT_TIMEOUT, MAX_TIME))
     log('全局限速: %d 次/秒' % VERIFY_RATE_LIMIT if VERIFY_RATE_LIMIT > 0 else '不限速')
