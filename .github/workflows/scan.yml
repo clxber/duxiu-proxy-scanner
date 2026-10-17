@@ -626,6 +626,14 @@ jobs:
           fi
           value=$(cat "$FLAG")
           if [ "$value" = "yes" ]; then
+            # ★ 新增：检查当前 run 是否被用户手动取消
+            echo "检查当前 run 状态..."
+            RUN_STATUS=$(gh run view ${{ github.run_id }} --json status -q .status)
+            if [ "$RUN_STATUS" = "cancelled" ]; then
+              echo "⚠️ 检测到当前 Run 被手动取消，放弃自动续跑。"
+              exit 0
+            fi
+
             echo "🔄 触发下一轮 workflow"
             gh workflow run scan.yml --ref main
           else
