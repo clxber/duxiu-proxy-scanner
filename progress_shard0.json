@@ -1,12 +1,12 @@
 {
-  "position": 16384,
-  "done": 2961498,
-  "total_ips": 16384,
-  "phase": "common",
+  "position": 4,
+  "done": 311,
+  "total_ips": 4,
+  "phase": "revalidate",
   "shard_index": 0,
   "shard_total": 8,
-  "started_at": "2026-10-17 12:24:24",
+  "started_at": "2026-10-17 12:49:38",
   "completed": true,
   "session": 1,
-  "completed_at": "2026-10-17 12:48:26"
+  "completed_at": "2026-10-17 12:49:40"
 }
