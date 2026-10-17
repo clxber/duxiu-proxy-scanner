@@ -10,7 +10,8 @@
 阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
 验证：单验证 —— 读秀（https://www.duxiu.com/），命中「读秀学术搜索」才算有效代理
 代理协议：http / socks5 / socks4（已去掉 https）
-★ 超时平衡：TCP_TIMEOUT=2.0，CONNECT_TIMEOUT=5，MAX_TIME=15
+★ 超时平衡：TCP_TIMEOUT=1.5，CONNECT_TIMEOUT=15，MAX_TIME=30
+★ 彻底取消验证限速（VERIFY_RATE_LIMIT=0），且内嵌验证改为并发，解决末尾死代理串行卡 35 分钟的问题
 """
 
 import os
@@ -30,9 +31,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ============ 配置 ============
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
-# ★ 恢复严格的超时，防止死代理卡死整个 job
-CONNECT_TIMEOUT = 5
-MAX_TIME = 15
+# ★ curl 超时
+CONNECT_TIMEOUT = 15
+MAX_TIME = 30
 
 # ★ 单验证：只测读秀
 VERIFY_TARGETS = [
@@ -98,8 +99,8 @@ args, _ = parser.parse_known_args()
 SHARD_INDEX = args.shard
 SHARD_TOTAL = args.shard_total
 
-# ★ 折中速度 2.0 秒
-TCP_TIMEOUT = 2.0
+# ★ 回退到 1.5 秒
+TCP_TIMEOUT = 1.5
 VERIFY_TIMEOUT = 30
 VERIFY_RETRY = 0
 VERIFY_DELAY = 0.0
@@ -107,7 +108,9 @@ VERIFY_DELAY = 0.0
 TCP_WORKERS = 40
 PORT_WORKERS = 20
 IP_COOLDOWN = 0.5
-VERIFY_RATE_LIMIT = 1
+
+# ★ 彻底取消全局限速
+VERIFY_RATE_LIMIT = 0
 
 INPUT_FILE = 'ip_list.txt'
 PHASE_FILE = 'phase.json'
@@ -307,6 +310,7 @@ _rate_last = [0.0]
 
 
 def verify_rate_wait():
+    # ★ VERIFY_RATE_LIMIT = 0 时直接返回，不进行任何限速
     if VERIFY_RATE_LIMIT <= 0:
         return
     min_interval = 1.0 / VERIFY_RATE_LIMIT
@@ -815,14 +819,20 @@ def main():
                 if short_circuit and ip_has_open:
                     break
 
+            # ★ 关键修复：把内嵌代理验证改为并发，不再串行死等
             if current_phase == 'common' and ip_has_open:
+                verify_futures = []
                 for port in PROXY_PORTS:
+                    verify_futures.append(port_pool.submit(scan_port_full, ip, port))
+                
+                for fut in as_completed(verify_futures):
                     if stop_flag[0]:
                         return
                     try:
-                        _, r_list2 = scan_port_full(ip, port)
+                        _, r_list2 = fut.result()
                     except Exception:
                         r_list2 = []
+                    
                     if r_list2:
                         ip_has_proxy = True
                         for item in r_list2:
