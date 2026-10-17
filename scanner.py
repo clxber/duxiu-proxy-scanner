@@ -10,8 +10,8 @@
 阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
 验证：单验证 —— 读秀（https://www.duxiu.com/），命中「读秀学术搜索」才算有效代理
 代理协议：http / socks5 / socks4（已去掉 https）
-★ 极速版：TCP_TIMEOUT=1.0，CONNECT_TIMEOUT=15，MAX_TIME=30
-★ 极限并发：50×20 = 1000 并发
+★ 极限压榨版：TCP_TIMEOUT=1.0，CONNECT_TIMEOUT=15，MAX_TIME=30
+★ 极限并发：60×25 = 1500 并发
 ★ 彻底取消验证限速（VERIFY_RATE_LIMIT=0），且内嵌验证并发，解决串行卡 35 分钟的问题
 """
 
@@ -105,9 +105,9 @@ TCP_TIMEOUT = 1.0
 VERIFY_TIMEOUT = 30
 VERIFY_RETRY = 0
 VERIFY_DELAY = 0.0
-# ★ 极限并发 50×20
-TCP_WORKERS = 50
-PORT_WORKERS = 20
+# ★ 极限并发 60×25 = 1500
+TCP_WORKERS = 60
+PORT_WORKERS = 25
 IP_COOLDOWN = 0.5
 
 # ★ 彻底取消全局限速
