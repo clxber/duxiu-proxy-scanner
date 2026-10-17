@@ -1,0 +1,57 @@
+name: Clean Shards
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  clean:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: 配置 Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: 彻底清理所有临时文件和状态
+        run: |
+          echo "正在清理分片文件和旧状态..."
+          # 删分片文件
+          rm -f progress_shard*.json
+          rm -f open_ips_shard*.txt
+          rm -f proxy_ips_shard*.txt
+          rm -f open_ips_revalidated_shard*.txt
+          rm -f proxy_missing_shard*.txt
+          rm -f working_proxies_shard*.txt
+          
+          # 删全局状态和结果（彻底重置）
+          rm -f working_proxies.txt
+          rm -f phase.json
+          rm -f alive_ip_ranges.txt
+          echo "清理完成！"
+
+      - name: 提交并推送
+        run: |
+          git add -A
+          if git diff --staged --quiet; then
+            echo "没有需要清理的文件，已是最干净状态。"
+            exit 0
+          fi
+          git commit -m "彻底清理分片和状态 [skip ci]"
+          success=false
+          for i in $(seq 1 10); do
+            if git pull origin main --rebase && git push; then
+              success=true; break
+            fi
+            git rebase --abort 2>/dev/null || true
+            WAIT=$((RANDOM % 5 + 2))
+            echo "重试 $i/10，等待 ${WAIT}s"
+            sleep $WAIT
+          done
+          [ "$success" = "true" ] || exit 1
