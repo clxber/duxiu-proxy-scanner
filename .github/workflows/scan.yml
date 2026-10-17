@@ -49,7 +49,14 @@ jobs:
           if-no-files-found: ignore
       - name: 提交
         if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          RUN_STATUS=$(gh run view ${{ github.run_id }} --json status -q .status 2>/dev/null || echo "running")
+          if [ "$RUN_STATUS" = "cancelled" ]; then
+            echo "⚠️ 检测到当前 Run 被取消，放弃保存分片进度。"
+            exit 0
+          fi
           for f in working_proxies_shard0.txt progress_shard0.json \
                    open_ips_shard0.txt proxy_ips_shard0.txt \
                    open_ips_revalidated_shard0.txt \
@@ -109,7 +116,14 @@ jobs:
           if-no-files-found: ignore
       - name: 提交
         if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          RUN_STATUS=$(gh run view ${{ github.run_id }} --json status -q .status 2>/dev/null || echo "running")
+          if [ "$RUN_STATUS" = "cancelled" ]; then
+            echo "⚠️ 检测到当前 Run 被取消，放弃保存分片进度。"
+            exit 0
+          fi
           for f in working_proxies_shard1.txt progress_shard1.json \
                    open_ips_shard1.txt proxy_ips_shard1.txt \
                    open_ips_revalidated_shard1.txt \
@@ -169,7 +183,14 @@ jobs:
           if-no-files-found: ignore
       - name: 提交
         if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          RUN_STATUS=$(gh run view ${{ github.run_id }} --json status -q .status 2>/dev/null || echo "running")
+          if [ "$RUN_STATUS" = "cancelled" ]; then
+            echo "⚠️ 检测到当前 Run 被取消，放弃保存分片进度。"
+            exit 0
+          fi
           for f in working_proxies_shard2.txt progress_shard2.json \
                    open_ips_shard2.txt proxy_ips_shard2.txt \
                    open_ips_revalidated_shard2.txt \
@@ -229,7 +250,14 @@ jobs:
           if-no-files-found: ignore
       - name: 提交
         if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          RUN_STATUS=$(gh run view ${{ github.run_id }} --json status -q .status 2>/dev/null || echo "running")
+          if [ "$RUN_STATUS" = "cancelled" ]; then
+            echo "⚠️ 检测到当前 Run 被取消，放弃保存分片进度。"
+            exit 0
+          fi
           for f in working_proxies_shard3.txt progress_shard3.json \
                    open_ips_shard3.txt proxy_ips_shard3.txt \
                    open_ips_revalidated_shard3.txt \
@@ -289,7 +317,14 @@ jobs:
           if-no-files-found: ignore
       - name: 提交
         if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          RUN_STATUS=$(gh run view ${{ github.run_id }} --json status -q .status 2>/dev/null || echo "running")
+          if [ "$RUN_STATUS" = "cancelled" ]; then
+            echo "⚠️ 检测到当前 Run 被取消，放弃保存分片进度。"
+            exit 0
+          fi
           for f in working_proxies_shard4.txt progress_shard4.json \
                    open_ips_shard4.txt proxy_ips_shard4.txt \
                    open_ips_revalidated_shard4.txt \
@@ -349,7 +384,14 @@ jobs:
           if-no-files-found: ignore
       - name: 提交
         if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          RUN_STATUS=$(gh run view ${{ github.run_id }} --json status -q .status 2>/dev/null || echo "running")
+          if [ "$RUN_STATUS" = "cancelled" ]; then
+            echo "⚠️ 检测到当前 Run 被取消，放弃保存分片进度。"
+            exit 0
+          fi
           for f in working_proxies_shard5.txt progress_shard5.json \
                    open_ips_shard5.txt proxy_ips_shard5.txt \
                    open_ips_revalidated_shard5.txt \
@@ -409,7 +451,14 @@ jobs:
           if-no-files-found: ignore
       - name: 提交
         if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          RUN_STATUS=$(gh run view ${{ github.run_id }} --json status -q .status 2>/dev/null || echo "running")
+          if [ "$RUN_STATUS" = "cancelled" ]; then
+            echo "⚠️ 检测到当前 Run 被取消，放弃保存分片进度。"
+            exit 0
+          fi
           for f in working_proxies_shard6.txt progress_shard6.json \
                    open_ips_shard6.txt proxy_ips_shard6.txt \
                    open_ips_revalidated_shard6.txt \
@@ -469,7 +518,14 @@ jobs:
           if-no-files-found: ignore
       - name: 提交
         if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          RUN_STATUS=$(gh run view ${{ github.run_id }} --json status -q .status 2>/dev/null || echo "running")
+          if [ "$RUN_STATUS" = "cancelled" ]; then
+            echo "⚠️ 检测到当前 Run 被取消，放弃保存分片进度。"
+            exit 0
+          fi
           for f in working_proxies_shard7.txt progress_shard7.json \
                    open_ips_shard7.txt proxy_ips_shard7.txt \
                    open_ips_revalidated_shard7.txt \
@@ -511,8 +567,51 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git pull origin main --rebase
 
-      - name: 下载 shard-0 artifact
+      - name: 检查是否被取消
+        id: check_cancel
         if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_STATUS=$(gh run view ${{ github.run_id }} --json status -q .status 2>/dev/null || echo "running")
+          if [ "$RUN_STATUS" = "cancelled" ]; then
+            echo "cancelled=true" >> $GITHUB_OUTPUT
+            echo "⚠️ 当前 run 已被用户取消，将执行残留清理。"
+          else
+            echo "cancelled=false" >> $GITHUB_OUTPUT
+            echo "✅ 正常结束或被截断，继续合并流程。"
+          fi
+
+      - name: 清理取消的中间文件
+        if: always() && steps.check_cancel.outputs.cancelled == 'true'
+        run: |
+          echo "清理所有分片残留文件..."
+          rm -f progress_shard*.json
+          rm -f open_ips_shard*.txt
+          rm -f proxy_ips_shard*.txt
+          rm -f open_ips_revalidated_shard*.txt
+          rm -f proxy_missing_shard*.txt
+          rm -f working_proxies_shard*.txt
+          
+          git add -A
+          if git diff --staged --quiet; then
+            echo "无残留文件。"
+          else
+            git commit -m "手动取消扫描，清理残留文件 [skip ci]"
+            success=false
+            for i in $(seq 1 10); do
+              if git pull origin main --rebase && git push; then
+                success=true; break
+              fi
+              git rebase --abort 2>/dev/null || true
+              WAIT=$((RANDOM % 26 + 5))
+              sleep $WAIT
+            done
+            [ "$success" = "true" ] || exit 1
+          fi
+
+      - name: 下载 shard-0 artifact
+        if: always() && steps.check_cancel.outputs.cancelled == 'false'
         continue-on-error: true
         uses: actions/download-artifact@v7
         with:
@@ -520,7 +619,7 @@ jobs:
           path: artifacts
           merge-multiple: true
       - name: 下载 shard-1 artifact
-        if: always()
+        if: always() && steps.check_cancel.outputs.cancelled == 'false'
         continue-on-error: true
         uses: actions/download-artifact@v7
         with:
@@ -528,7 +627,7 @@ jobs:
           path: artifacts
           merge-multiple: true
       - name: 下载 shard-2 artifact
-        if: always()
+        if: always() && steps.check_cancel.outputs.cancelled == 'false'
         continue-on-error: true
         uses: actions/download-artifact@v7
         with:
@@ -536,7 +635,7 @@ jobs:
           path: artifacts
           merge-multiple: true
       - name: 下载 shard-3 artifact
-        if: always()
+        if: always() && steps.check_cancel.outputs.cancelled == 'false'
         continue-on-error: true
         uses: actions/download-artifact@v7
         with:
@@ -544,7 +643,7 @@ jobs:
           path: artifacts
           merge-multiple: true
       - name: 下载 shard-4 artifact
-        if: always()
+        if: always() && steps.check_cancel.outputs.cancelled == 'false'
         continue-on-error: true
         uses: actions/download-artifact@v7
         with:
@@ -552,7 +651,7 @@ jobs:
           path: artifacts
           merge-multiple: true
       - name: 下载 shard-5 artifact
-        if: always()
+        if: always() && steps.check_cancel.outputs.cancelled == 'false'
         continue-on-error: true
         uses: actions/download-artifact@v7
         with:
@@ -560,7 +659,7 @@ jobs:
           path: artifacts
           merge-multiple: true
       - name: 下载 shard-6 artifact
-        if: always()
+        if: always() && steps.check_cancel.outputs.cancelled == 'false'
         continue-on-error: true
         uses: actions/download-artifact@v7
         with:
@@ -568,7 +667,7 @@ jobs:
           path: artifacts
           merge-multiple: true
       - name: 下载 shard-7 artifact
-        if: always()
+        if: always() && steps.check_cancel.outputs.cancelled == 'false'
         continue-on-error: true
         uses: actions/download-artifact@v7
         with:
@@ -577,7 +676,7 @@ jobs:
           merge-multiple: true
 
       - name: 从 Artifact 恢复缺失文件
-        if: always()
+        if: always() && steps.check_cancel.outputs.cancelled == 'false'
         run: |
           if [ -d artifacts ]; then
             count=0
@@ -596,10 +695,11 @@ jobs:
           fi
 
       - name: 合并结果
+        if: always() && steps.check_cancel.outputs.cancelled == 'false'
         run: python merge_shards.py
 
       - name: 提交
-        if: always()
+        if: always() && steps.check_cancel.outputs.cancelled == 'false'
         run: |
           git add -A
           git diff --staged --quiet || git commit -m "合并 [skip ci]"
@@ -617,7 +717,7 @@ jobs:
           [ "$success" = "true" ] || exit 1
 
       - name: 触发下一轮（仅当需要续跑时）
-        if: always()
+        if: always() && steps.check_cancel.outputs.cancelled == 'false'
         run: |
           FLAG="$RUNNER_TEMP/trigger.flag"
           if [ ! -f "$FLAG" ]; then
@@ -626,14 +726,6 @@ jobs:
           fi
           value=$(cat "$FLAG")
           if [ "$value" = "yes" ]; then
-            # ★ 新增：检查当前 run 是否被用户手动取消
-            echo "检查当前 run 状态..."
-            RUN_STATUS=$(gh run view ${{ github.run_id }} --json status -q .status)
-            if [ "$RUN_STATUS" = "cancelled" ]; then
-              echo "⚠️ 检测到当前 Run 被手动取消，放弃自动续跑。"
-              exit 0
-            fi
-
             echo "🔄 触发下一轮 workflow"
             gh workflow run scan.yml --ref main
           else
@@ -643,7 +735,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 上传最终 Artifact
-        if: always()
+        if: always() && steps.check_cancel.outputs.cancelled == 'false'
         uses: actions/upload-artifact@v7
         with:
           name: working-proxies-${{ github.run_id }}
