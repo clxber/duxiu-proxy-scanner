@@ -1,7 +1,16 @@
 # -*- coding: utf-8 -*-
 """
 高校代理扫描器 —— 五阶段 + 分片 + 断点续跑
-★ 极速版：TCP_TIMEOUT=1.0，800 并发，冲击 800 task/s
+阶段 1 verify_existing：验证已有代理（只有分片 0 干活）
+阶段 2 common         ：12 探针 + 177 代理（TCP 探活，IP 级短路）+ 顺便代理验证
+                        → 输出 open_ips_shardN.txt（所有存活 IP）
+                        → 输出 proxy_ips_shardN.txt（有代理的 IP，供 revalidate 用）
+阶段 3 revalidate     ：对 proxy_ips_shardN.txt（有代理的 IP）二次探活
+阶段 4 proxy          ：177 代理端口（完整扫描 + 单验证，3 协议全试）
+阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
+验证：单验证 —— 读秀（https://www.duxiu.com/），命中「读秀学术搜索」才算有效代理
+代理协议：http / socks5 / socks4（已去掉 https）
+★ 超时平衡：TCP_TIMEOUT=2.0，CONNECT_TIMEOUT=5，MAX_TIME=15
 """
 
 import os
@@ -21,8 +30,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ============ 配置 ============
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
-CONNECT_TIMEOUT = 10
-MAX_TIME = 30
+# ★ 恢复严格的超时，防止死代理卡死整个 job
+CONNECT_TIMEOUT = 5
+MAX_TIME = 15
 
 # ★ 单验证：只测读秀
 VERIFY_TARGETS = [
@@ -88,12 +98,12 @@ args, _ = parser.parse_known_args()
 SHARD_INDEX = args.shard
 SHARD_TOTAL = args.shard_total
 
-# ★ 极限速度 1.0 秒
-TCP_TIMEOUT = 1.0
+# ★ 折中速度 2.0 秒
+TCP_TIMEOUT = 2.0
 VERIFY_TIMEOUT = 30
 VERIFY_RETRY = 0
 VERIFY_DELAY = 0.0
-# ★ 800 并发
+# ★ 保持 800 并发
 TCP_WORKERS = 40
 PORT_WORKERS = 20
 IP_COOLDOWN = 0.5
