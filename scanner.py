@@ -2,14 +2,14 @@
 """
 高校代理扫描器 —— 五阶段 + 分片 + 断点续跑
 阶段 1 verify_existing：验证已有代理（只有分片 0 干活）
-阶段 2 common         ：12 探针 + 174 代理（TCP 探活，IP 级短路）+ 顺便代理验证
+阶段 2 common         ：12 探针 + 177 代理（TCP 探活，IP 级短路）+ 顺便代理验证
                         → 输出 open_ips_shardN.txt（所有存活 IP）
                         → 输出 proxy_ips_shardN.txt（有代理的 IP，供 revalidate 用）
 阶段 3 revalidate     ：对 proxy_ips_shardN.txt（有代理的 IP）二次探活
-阶段 4 proxy          ：174 代理端口（完整扫描 + 单验证，4 协议全试）
+阶段 4 proxy          ：177 代理端口（完整扫描 + 单验证，3 协议全试）
 阶段 5 full           ：65535 全端口（只扫 proxy 未找到代理的 IP）
 验证：单验证 —— 读秀（https://www.duxiu.com/），命中「读秀学术搜索」才算有效代理
-代理协议：http / https / socks5 / socks4（4 协议统一测读秀 https）
+代理协议：http / socks5 / socks4（已去掉 https）
 """
 
 import os
@@ -38,7 +38,7 @@ VERIFY_TARGETS = [
         'urls': ['https://www.duxiu.com/'],
         'keywords': ['读秀学术搜索'],
         'exclude': ['系统登录', '用户名', '密 码', '请完成安全验证'],
-        'protocols': ['http', 'https', 'socks5', 'socks4'],
+        'protocols': ['http', 'socks5', 'socks4'],
     },
 ]
 
@@ -56,8 +56,9 @@ def _build_proxy_ports():
         (10000, 10010), (10080, 10086), (3128, 3130), (8388, 8389),
         (8443, 8444), (2052, 2096), (51820, 51830), (1194, 1199),
         (9050, 9051), (9150, 9151),
-        # ★ 根据用户提供的真实代理列表，新增缺失的独立端口
+        # ★ 根据真实代理列表，新增独立端口
         (15732, 15732), (26001, 26001), (29290, 29290),
+        (10090, 10090), (17891, 17891), (10792, 10792),
     ]
     s = set()
     for a, b in groups:
@@ -128,7 +129,8 @@ ALIVE_IP_RANGES_FILE = 'alive_ip_ranges.txt'
 
 CURL = shutil.which('curl') or 'curl'
 
-PROTOCOLS = ('http', 'https', 'socks5', 'socks4')
+# ★ 去掉 https 协议，只保留 http / socks5 / socks4
+PROTOCOLS = ('http', 'socks5', 'socks4')
 
 
 def log(msg):
